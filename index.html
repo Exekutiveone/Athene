@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Asset Map – Fahrzeuge steuern</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+    }
+    #map {
+      position: absolute;
+      top: 80px;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: calc(100% - 80px);
+      width: 100%;
+      z-index: 1;
+    }
+    #controls {
+      position: absolute;
+      top: 5px;
+      left: 10px;
+      z-index: 1000;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <select id="layer-select">
+      <option value="osm">OpenStreetMap</option>
+      <option value="topo">OpenTopoMap</option>
+      <option value="esri">Esri Satellit</option>
+      <option value="carto">CartoDB Positron</option>
+      <option value="stamen">Stamen Terrain</option>
+    </select>
+
+    <select id="vehicle-select"></select>
+    <button id="add-vehicle">+ Fahrzeug</button>
+    <button id="remove-vehicle">– Fahrzeug</button>
+  </div>
+
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"></script>
+
+  <script type="module">
+    import { initMap, switchBaseLayer } from './map_core.js';
+    import { initAirAsset, moveAirTo } from './air_asset.js';
+    import { createGroundAsset } from './ground_asset.js';
+
+    const map = initMap();
+    const plane = initAirAsset(map);
+
+    const layerSelect = document.getElementById('layer-select');
+    const vehicleSelect = document.getElementById('vehicle-select');
+    const addBtn = document.getElementById('add-vehicle');
+    const removeBtn = document.getElementById('remove-vehicle');
+
+    const groundAssets = [];
+    let counter = 1;
+
+    function updateDropdown() {
+      vehicleSelect.innerHTML = '';
+      groundAssets.forEach((a, i) => {
+        const opt = document.createElement('option');
+        opt.value = i;
+        opt.textContent = `Fahrzeug ${a.id}`;
+        vehicleSelect.appendChild(opt);
+      });
+    }
+
+    addBtn.onclick = () => {
+      const asset = createGroundAsset(map, [48.775 + Math.random() * 0.002, 9.182 + Math.random() * 0.002]);
+      asset.id = counter++;
+      groundAssets.push(asset);
+      updateDropdown();
+    };
+
+    removeBtn.onclick = () => {
+      const selectedIndex = parseInt(vehicleSelect.value);
+      if (isNaN(selectedIndex)) return;
+      const asset = groundAssets[selectedIndex];
+      map.removeLayer(asset.marker);
+      clearInterval(asset.interval);
+      groundAssets.splice(selectedIndex, 1);
+      updateDropdown();
+    };
+
+    layerSelect.onchange = (e) => {
+      switchBaseLayer(e.target.value);
+    };
+
+    map.on('click', (e) => {
+  moveAirTo(plane, e.latlng);
+  groundAssets.forEach(asset => {
+    asset.moveTo(e.latlng);
+  });
+});
+  </script>
+</body>
+</html>
