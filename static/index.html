@@ -168,12 +168,6 @@
       }
     });
 
-    map.on('click', (e) => {
-      groundAssets.forEach(asset => {
-        asset.moveTo(e.latlng);
-      });
-    });
-
     window.addEventListener('keydown', (e) => {
       if (!selectedAsset) return;
       const step = 0.0003;
