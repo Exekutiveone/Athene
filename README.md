@@ -29,7 +29,7 @@ Once running, open [http://localhost:5000](http://localhost:5000) in your browse
 
 - The top-left controls let you switch between different map layers.
 - Use "+ Fahrzeug" to add a ground vehicle and "– Fahrzeug" to remove the selected one.
-- Click anywhere on the map to move all vehicles and the aircraft to that location.
+- Click anywhere on the map to move all vehicles to that location.
 
 Enjoy exploring the demo!
 
