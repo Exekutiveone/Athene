@@ -16,7 +16,6 @@ export function createGroundAsset(map, position) {
     isAir: false,
     onSelect: null,
     onDragEnd: null,
-    onSelect: null,
     moveTo: (target) => moveGroundTo(marker, target, asset)
   };
 

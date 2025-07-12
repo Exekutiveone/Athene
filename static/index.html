@@ -194,8 +194,12 @@
       } else {
         selectedAsset.targetMarker = L.marker(e.latlng, { icon: flagIcon }).addTo(map);
       }
+    });
+
     map.on('click', (e) => {
       plane.moveTo(e.latlng);
+    });
+
     map.on('click', (e) => {
       moveAirTo(plane, e.latlng);
       groundAssets.forEach(asset => {
