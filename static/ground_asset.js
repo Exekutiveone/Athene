@@ -1,7 +1,8 @@
 export function createGroundAsset(map, position) {
   const icon = L.icon({
     iconUrl: 'https://cdn-icons-png.flaticon.com/512/148/148767.png',
-    iconSize: [32, 32]
+    iconSize: [32, 32],
+    className: 'unit-icon'
   });
 
   const marker = L.marker(position, { icon, draggable: true }).addTo(map).bindPopup('Bodenfahrzeug');

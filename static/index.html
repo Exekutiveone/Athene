@@ -31,6 +31,10 @@
       gap: 8px;
       align-items: center;
     }
+
+    .unit-icon.selected-marker {
+      filter: hue-rotate(310deg) saturate(6) brightness(1.2);
+    }
   </style>
 </head>
 <body>
@@ -44,6 +48,7 @@
     </select>
 
     <select id="vehicle-select"></select>
+    <select id="enemy-select"></select>
     <button id="add-vehicle">+ Fahrzeug</button>
     <button id="remove-vehicle">– Fahrzeug</button>
   </div>
@@ -55,14 +60,18 @@
 
   <script type="module">
     import { initMap, switchBaseLayer } from '/map_core.js';
-    import { initAirAsset, moveAirTo } from '/air_asset.js';
+    import { initAirAsset } from '/air_asset.js';
     import { createGroundAsset } from '/ground_asset.js';
 
     const map = initMap();
     const plane = initAirAsset(map);
+    plane.onSelect = selectAsset;
+
+    const enemyAssets = [plane];
 
     const layerSelect = document.getElementById('layer-select');
     const vehicleSelect = document.getElementById('vehicle-select');
+    const enemySelect = document.getElementById('enemy-select');
     const addBtn = document.getElementById('add-vehicle');
     const removeBtn = document.getElementById('remove-vehicle');
 
@@ -71,6 +80,31 @@
     let selectedAsset = null;
 
     function selectAsset(asset) {
+      if (selectedAsset && selectedAsset.marker.getElement()) {
+        selectedAsset.marker.getElement().classList.remove('selected-marker');
+      }
+      selectedAsset = asset;
+      [...groundAssets, ...enemyAssets].forEach(a => {
+        const el = a.marker.getElement();
+        if (!el) return;
+        if (a === asset) {
+          el.classList.add('selected-marker');
+        } else {
+          el.classList.remove('selected-marker');
+        }
+      });
+
+      const idx = groundAssets.indexOf(asset);
+      if (idx >= 0) {
+        vehicleSelect.value = idx;
+        enemySelect.value = '';
+      } else {
+        const eIdx = enemyAssets.indexOf(asset);
+        if (eIdx >= 0) {
+          enemySelect.value = eIdx;
+          vehicleSelect.value = '';
+        }
+      }
       selectedAsset = asset;
       groundAssets.forEach(a => {
         a.marker.setOpacity(a === asset ? 1 : 0.6);
@@ -88,7 +122,17 @@
         opt.textContent = `Fahrzeug ${a.id}`;
         vehicleSelect.appendChild(opt);
       });
+
+      enemySelect.innerHTML = '';
+      enemyAssets.forEach((a, i) => {
+        const opt = document.createElement('option');
+        opt.value = i;
+        opt.textContent = `Feind ${i + 1}`;
+        enemySelect.appendChild(opt);
+      });
     }
+
+    updateDropdown();
 
     addBtn.onclick = () => {
       const asset = createGroundAsset(map, [48.775 + Math.random() * 0.002, 9.182 + Math.random() * 0.002]);
@@ -122,6 +166,15 @@
       }
     };
 
+    enemySelect.onchange = () => {
+      const idx = parseInt(enemySelect.value);
+      if (!isNaN(idx)) {
+        selectAsset(enemyAssets[idx]);
+      }
+    };
+
+    map.on('click', (e) => {
+      plane.moveTo(e.latlng);
     map.on('click', (e) => {
       moveAirTo(plane, e.latlng);
       groundAssets.forEach(asset => {
