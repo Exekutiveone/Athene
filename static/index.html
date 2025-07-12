@@ -48,7 +48,6 @@
     </select>
 
     <select id="vehicle-select"></select>
-    <select id="enemy-select"></select>
     <button id="add-vehicle">+ Fahrzeug</button>
     <button id="remove-vehicle">– Fahrzeug</button>
     <button id="pathfind">Pfadfinder</button>
@@ -61,18 +60,13 @@
 
   <script type="module">
     import { initMap, switchBaseLayer } from '/map_core.js';
-    import { initAirAsset, moveAirTo } from '/air_asset.js';
     import { createGroundAsset } from '/ground_asset.js';
 
     const map = initMap();
-    const plane = initAirAsset(map);
-    plane.onSelect = selectAsset;
 
-    const enemyAssets = [plane];
 
     const layerSelect = document.getElementById('layer-select');
     const vehicleSelect = document.getElementById('vehicle-select');
-    const enemySelect = document.getElementById('enemy-select');
     const addBtn = document.getElementById('add-vehicle');
     const removeBtn = document.getElementById('remove-vehicle');
     const pathBtn = document.getElementById('pathfind');
@@ -86,7 +80,7 @@
         selectedAsset.marker.getElement().classList.remove('selected-marker');
       }
       selectedAsset = asset;
-      [...groundAssets, ...enemyAssets].forEach(a => {
+      groundAssets.forEach(a => {
         const el = a.marker.getElement();
         if (!el) return;
         if (a === asset) {
@@ -99,13 +93,6 @@
       const idx = groundAssets.indexOf(asset);
       if (idx >= 0) {
         vehicleSelect.value = idx;
-        enemySelect.value = '';
-      } else {
-        const eIdx = enemyAssets.indexOf(asset);
-        if (eIdx >= 0) {
-          enemySelect.value = eIdx;
-          vehicleSelect.value = '';
-        }
       }
       selectedAsset = asset;
       groundAssets.forEach(a => {
@@ -123,13 +110,6 @@
         vehicleSelect.appendChild(opt);
       });
 
-      enemySelect.innerHTML = '';
-      enemyAssets.forEach((a, i) => {
-        const opt = document.createElement('option');
-        opt.value = i;
-        opt.textContent = `Feind ${i + 1}`;
-        enemySelect.appendChild(opt);
-      });
     }
 
     updateDropdown();
@@ -168,12 +148,6 @@
       }
     };
 
-    enemySelect.onchange = () => {
-      const idx = parseInt(enemySelect.value);
-      if (!isNaN(idx)) {
-        selectAsset(enemyAssets[idx]);
-      }
-    };
 
     pathBtn.onclick = () => {
       if (!selectedAsset || !selectedAsset.target) return;
@@ -195,11 +169,6 @@
     });
 
     map.on('click', (e) => {
-      plane.moveTo(e.latlng);
-    });
-
-    map.on('click', (e) => {
-      moveAirTo(plane, e.latlng);
       groundAssets.forEach(asset => {
         asset.moveTo(e.latlng);
       });
