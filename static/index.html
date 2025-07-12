@@ -111,8 +111,6 @@
       groundAssets.forEach(a => {
         a.marker.setOpacity(a === asset ? 1 : 0.6);
       });
-      const idx = groundAssets.indexOf(asset);
-      if (idx >= 0) vehicleSelect.value = idx;
       asset.marker.openPopup();
     }
 
