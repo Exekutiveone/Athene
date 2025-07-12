@@ -4,13 +4,26 @@ export function createGroundAsset(map, position) {
     iconSize: [32, 32]
   });
 
-  const marker = L.marker(position, { icon }).addTo(map).bindPopup("Bodenfahrzeug");
+  const marker = L.marker(position, { icon, draggable: true }).addTo(map).bindPopup('Bodenfahrzeug');
 
   const asset = {
     marker,
     interval: null,
+    onSelect: null,
     moveTo: (target) => moveGroundTo(marker, target, asset)
   };
+
+  marker.on('click', () => {
+    if (asset.onSelect) asset.onSelect(asset);
+  });
+
+  marker.on('dragstart', () => {
+    if (asset.interval) clearInterval(asset.interval);
+  });
+
+  marker.on('dragend', () => {
+    if (asset.onDragEnd) asset.onDragEnd(asset);
+  });
 
   return asset;
 }
