@@ -1,16 +1,30 @@
 export function createGroundAsset(map, position) {
   const icon = L.icon({
     iconUrl: 'https://cdn-icons-png.flaticon.com/512/148/148767.png',
-    iconSize: [32, 32]
+    iconSize: [32, 32],
+    className: 'unit-icon'
   });
 
-  const marker = L.marker(position, { icon }).addTo(map).bindPopup("Bodenfahrzeug");
+  const marker = L.marker(position, { icon, draggable: true }).addTo(map).bindPopup('Bodenfahrzeug');
 
   const asset = {
     marker,
     interval: null,
+    onSelect: null,
     moveTo: (target) => moveGroundTo(marker, target, asset)
   };
+
+  marker.on('click', () => {
+    if (asset.onSelect) asset.onSelect(asset);
+  });
+
+  marker.on('dragstart', () => {
+    if (asset.interval) clearInterval(asset.interval);
+  });
+
+  marker.on('dragend', () => {
+    if (asset.onDragEnd) asset.onDragEnd(asset);
+  });
 
   return asset;
 }
