@@ -105,6 +105,12 @@
           vehicleSelect.value = '';
         }
       }
+      selectedAsset = asset;
+      groundAssets.forEach(a => {
+        a.marker.setOpacity(a === asset ? 1 : 0.6);
+      });
+      const idx = groundAssets.indexOf(asset);
+      if (idx >= 0) vehicleSelect.value = idx;
       asset.marker.openPopup();
     }
 
@@ -169,6 +175,8 @@
 
     map.on('click', (e) => {
       plane.moveTo(e.latlng);
+    map.on('click', (e) => {
+      moveAirTo(plane, e.latlng);
       groundAssets.forEach(asset => {
         asset.moveTo(e.latlng);
       });
