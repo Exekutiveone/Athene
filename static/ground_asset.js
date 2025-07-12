@@ -1,5 +1,3 @@
-const activeGroundAssets = [];
-
 export function createGroundAsset(map, position) {
   const icon = L.icon({
     iconUrl: 'https://cdn-icons-png.flaticon.com/512/148/148767.png',
