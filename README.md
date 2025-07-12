@@ -1,5 +1,21 @@
 # Athene
 
+This project provides a simple Flask web server for serving the Leaflet-based asset map.
+
+## Installation
+
+Install the required dependencies using pip:
+
+```bash
+pip install -r requirements.txt
+```
+
+## Usage
+
+After installing the dependencies, start the application with:
+
+```bash
+python app.py
 This project contains a small Flask application that serves the files from the
 `static` directory. It is intended for quickly testing the Leaflet front end.
 
