@@ -15,6 +15,7 @@ export function initAirAsset(map) {
     targetMarker: null,
     isAir: true,
     moveTo: (target) => moveAirTo(marker, target, asset),
+    moveTo: (target) => moveAirTo(marker, target),
     onSelect: null,
     onDragEnd: null,
   };
