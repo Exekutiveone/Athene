@@ -51,6 +51,7 @@
     <select id="enemy-select"></select>
     <button id="add-vehicle">+ Fahrzeug</button>
     <button id="remove-vehicle">– Fahrzeug</button>
+    <button id="pathfind">Pfadfinder</button>
   </div>
 
   <div id="map"></div>
@@ -74,6 +75,7 @@
     const enemySelect = document.getElementById('enemy-select');
     const addBtn = document.getElementById('add-vehicle');
     const removeBtn = document.getElementById('remove-vehicle');
+    const pathBtn = document.getElementById('pathfind');
 
     const groundAssets = [];
     let counter = 1;
@@ -150,6 +152,8 @@
       const asset = groundAssets[selectedIndex];
       map.removeLayer(asset.marker);
       clearInterval(asset.interval);
+      if (asset.pathLine) map.removeLayer(asset.pathLine);
+      if (asset.targetMarker) map.removeLayer(asset.targetMarker);
       groundAssets.splice(selectedIndex, 1);
       updateDropdown();
       selectedAsset = null;
@@ -173,6 +177,23 @@
       }
     };
 
+    pathBtn.onclick = () => {
+      if (!selectedAsset || !selectedAsset.target) return;
+      selectedAsset.moveTo(selectedAsset.target);
+    };
+
+    map.on('click', (e) => {
+      if (!selectedAsset) return;
+      selectedAsset.target = e.latlng;
+      const flagIcon = L.icon({
+        iconUrl: 'https://cdn-icons-png.flaticon.com/512/2991/2991148.png',
+        iconSize: [24, 24]
+      });
+      if (selectedAsset.targetMarker) {
+        selectedAsset.targetMarker.setLatLng(e.latlng);
+      } else {
+        selectedAsset.targetMarker = L.marker(e.latlng, { icon: flagIcon }).addTo(map);
+      }
     map.on('click', (e) => {
       plane.moveTo(e.latlng);
     map.on('click', (e) => {
