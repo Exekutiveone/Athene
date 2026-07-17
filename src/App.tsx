@@ -73,7 +73,7 @@ import {
   saveScenarioRecord,
   saveStakeholder,
 } from "./api";
-import { aggregateAreaRecords, calculatePolygonHectares, calculateRouteCoverageShare, ManagementSelection, normalizeDeploymentArea, resolveManagementSelection, seedDeploymentAreas, seedMunicipalities, seedPlannedMissions, seedStakeholders } from "./management";
+import { aggregateAreaRecords, calculatePolygonHectares, calculateRouteCoverageShare, hasDefinedMissionPath, ManagementSelection, normalizeDeploymentArea, resolveManagementSelection, seedDeploymentAreas, seedMunicipalities, seedPlannedMissions, seedStakeholders } from "./management";
 import { acknowledgeManagementMutation, enqueueManagementMutation, flushManagementOutbox, ManagementMutation, mergePendingEntities, readManagementOutbox } from "./managementOutbox";
 import { buildFallbackWeather, describeWeatherCode, fetchLiveWeather, LiveWeather } from "./weather";
 import {
@@ -196,6 +196,7 @@ interface CustomerMissionTemplate {
   seed: string;
   scenarioName: string;
   pathName: string;
+  missionPath?: { name: string; waypoints: Waypoint[] } | null;
   params: ScenarioParams;
 }
 
@@ -442,6 +443,7 @@ export function App() {
   const selectedMunicipality = portalMunicipalities.find((item) => item.id === selectedMunicipalityId) ?? null;
   const selectedArea = deploymentAreas.find((area) => area.id === selectedAreaId && area.municipalityId === selectedMunicipalityId && area.status !== "archiviert") ?? null;
   const selectedCustomerMission = portalMissions.find((item) => item.id === selectedCustomerMissionId && item.areaId === selectedAreaId && item.municipalityId === selectedMunicipalityId) ?? null;
+  const hasActiveMissionPath = selectedCustomerMission?.missionPath !== null || draftWaypoints.length >= 2;
   const allIndexDefinitions = useMemo<IndexDefinitionDemo[]>(() => [...customIndexes, ...indexDefinitionsDemo], [customIndexes]);
   const displayedIndexDefinitions = useMemo(
     () =>
@@ -630,6 +632,20 @@ export function App() {
     };
     persistSavedPaths([record, ...savedPaths.filter((path) => path.name !== name)]);
     void savePathRecord(record).catch(() => undefined);
+    if (selectedCustomerMission) {
+      const updated: PlannedMissionRecord = {
+        ...plannedMissions.find((item) => item.id === selectedCustomerMission.id)!,
+        pathName: name,
+        missionPath: { name, waypoints: record.waypoints },
+        status: "bereit",
+        updatedAt: new Date().toISOString(),
+      };
+      setPlannedMissions((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+      void savePlannedMission(updated).catch(() => {
+        setPendingSyncCount(enqueueManagementMutation("mission", updated).length);
+      });
+      setManagementFeedback({ tone: "success", message: `${name} wurde der Mission dauerhaft zugeordnet.` });
+    }
   };
 
   const loadSavedPath = (path: SavedPathRecord) => {
@@ -692,8 +708,8 @@ export function App() {
     setScenarioName(missionTemplate.scenarioName);
     setSeed(missionTemplate.seed);
     setParams(missionTemplate.params);
-    setDraftPathName(missionTemplate.pathName);
-    setDraftWaypoints([]);
+    setDraftPathName(missionTemplate.missionPath?.name ?? missionTemplate.pathName);
+    setDraftWaypoints(missionTemplate.missionPath === null ? [] : missionTemplate.missionPath ? buildWaypoints(missionTemplate.missionPath.waypoints) : []);
     setSelectedScenarioId("");
     setCurrentIndex(0);
     setSelectedCell(null);
@@ -702,7 +718,7 @@ export function App() {
   };
 
   const startCustomerMissionProcessing = () => {
-    if (!selectedCustomerMission) return;
+    if (!selectedCustomerMission || !hasDefinedMissionPath(selectedCustomerMission)) return;
     loadCustomerMission(selectedCustomerMission);
     setActiveLayerId("dryStress");
     setBaseMapId("satellite");
@@ -717,7 +733,7 @@ export function App() {
     loadCustomerMission(missionTemplate);
     setActiveLayerId("dryStress");
     setBaseMapId("satellite");
-    if (startProcessing) {
+    if (startProcessing && hasDefinedMissionPath(missionTemplate)) {
       setCustomerMissionStatus("processing");
       setIsPlaying(true);
     }
@@ -727,6 +743,11 @@ export function App() {
     const area = deploymentAreas.find((item) => item.id === areaId);
     if (!area || !area.municipalityId) {
       setManagementFeedback({ tone: "error", message: "Dieses Einsatzgebiet ist keiner Gemeinde zugeordnet und muss zuerst geprüft werden." });
+      return;
+    }
+    if (area.boundaryStatus === "pending") {
+      setManagementFeedback({ tone: "error", message: "Bitte zuerst die ausstehende Gebietsgrenze auf der Karte einzeichnen." });
+      openAreaOnMap(area.id);
       return;
     }
     selectManagementContext({ areaId: area.id, missionId: null });
@@ -835,6 +856,7 @@ export function App() {
           description: values.description,
           status: values.status,
           polygon,
+          boundaryStatus: existing?.boundaryStatus ?? "pending",
           createdAt: existing?.createdAt ?? timestamp,
           updatedAt: timestamp,
           source: existing?.source ?? "Verwaltungsportal",
@@ -855,6 +877,7 @@ export function App() {
           seed: `ATHENE-${area.id}-${Date.now()}`,
           scenarioName: values.title,
           pathName: `${area.name} Route`,
+          missionPath: null,
           params: defaultScenarioParams,
           requestedAt: values.requestedAt,
           createdAt: timestamp,
@@ -1021,7 +1044,6 @@ export function App() {
         indexDefinitions={displayedIndexDefinitions}
         onSelectMunicipality={(municipalityId) => selectManagementContext({ municipalityId })}
         onOpenMission={openGeoMissionFromPortal}
-        onOpenAreaGeo={openAreaInGeo}
         onOpenAreaMap={openAreaOnMap}
         onCreateMunicipality={() => { setEditingMunicipalityId(null); setManagementDialog("municipality"); }}
         onEditMunicipality={(municipalityId) => { setEditingMunicipalityId(municipalityId); setManagementDialog("municipality"); }}
@@ -1361,7 +1383,7 @@ export function App() {
               <Trash2 size={16} />
             </button>
           </div>
-          <button className="textButton" onClick={() => setDraftWaypoints(buildWaypoints(scenario.forestPath.waypoints))}>
+          <button className="textButton" onClick={() => setDraftWaypoints(buildWaypoints(scenario.forestPath.waypoints))} disabled={selectedCustomerMission?.missionPath === null} title={selectedCustomerMission?.missionPath === null ? "Für neue Missionen muss ein eigener oder importierter Weg verwendet werden." : undefined}>
             Standardroute zum Bearbeiten laden
           </button>
           <button className="savePathButton" onClick={saveDraftPath} disabled={draftWaypoints.length < 2}>
@@ -1372,7 +1394,7 @@ export function App() {
             <strong>{draftWaypoints.length}</strong>
             <small>{measuredCoverageCount.toLocaleString("de-DE")} Messfelder · Bewertung: {routeAssessment}</small>
             <small>{formatRouteLength(activeRouteLengthMeters)} Strecke · {activeScenario.forestArea.hectares.toFixed(2)} ha Messkorridor</small>
-            <span>{draftWaypoints.length >= 2 ? "manuelle Route aktiv" : "mindestens 2 Punkte für eigene Route"}</span>
+            <span>{!hasActiveMissionPath ? "Noch kein Missionspfad definiert" : draftWaypoints.length >= 2 ? "manuelle Route aktiv" : "Legacy-Standardroute aktiv"}</span>
           </div>
           <div className="waypointList">
             {draftWaypoints.slice(-5).map((waypoint) => (
@@ -1433,14 +1455,14 @@ export function App() {
                 weight: 2,
               }}
             />
-            <Polyline
+            {hasActiveMissionPath && <Polyline
               positions={activeForestPath.waypoints.map(toLatLng)}
               pathOptions={{ color: baseMapId === "satellite" ? "#ffffff" : "#64748b", weight: 16, opacity: baseMapId === "satellite" ? 0.16 : 0.2 }}
-            />
-            <Polyline
+            />}
+            {hasActiveMissionPath && <Polyline
               positions={activeForestPath.waypoints.map(toLatLng)}
               pathOptions={{ color: draftWaypoints.length >= 2 ? "#f59e0b" : "#14b8a6", weight: 5, opacity: 0.95 }}
-            />
+            />}
             {draftWaypoints.map((waypoint) => (
               <CircleMarker
                 key={waypoint.id}
@@ -1448,12 +1470,12 @@ export function App() {
                 radius={6}
                 pathOptions={{ color: "#7c2d12", fillColor: "#f59e0b", fillOpacity: 1, weight: 2 }}
               >
-                <Tooltip>
-                  Wegpunkt {waypoint.sequence}: {waypoint.lat.toFixed(5)}, {waypoint.lng.toFixed(5)}
+                <Tooltip permanent={waypoint.sequence === 1 || waypoint.sequence === draftWaypoints.length} direction={waypoint.sequence === 1 ? "left" : "right"}>
+                  {waypoint.sequence === 1 ? "Start" : waypoint.sequence === draftWaypoints.length ? "Ende" : `Wegpunkt ${waypoint.sequence}`}: {waypoint.lat.toFixed(5)}, {waypoint.lng.toFixed(5)}
                 </Tooltip>
               </CircleMarker>
             ))}
-            {coverage.map((cell) => (
+            {hasActiveMissionPath && coverage.map((cell) => (
               <Rectangle
                 key={cell.id}
                 bounds={cellBounds.get(cell.id) ?? [[cell.lat, cell.lng], [cell.lat, cell.lng]]}
@@ -1472,7 +1494,7 @@ export function App() {
                 </Tooltip>
               </Rectangle>
             ))}
-            <CircleMarker
+            {hasActiveMissionPath && <CircleMarker
               center={[currentObservation.lat, currentObservation.lng]}
               radius={9}
               pathOptions={{ color: "#111827", fillColor: "#f97316", fillOpacity: 1, weight: 3 }}
@@ -1480,7 +1502,7 @@ export function App() {
               <Tooltip permanent direction="top">
                 UGV
               </Tooltip>
-            </CircleMarker>
+            </CircleMarker>}
           </MapContainer>
 
           <div className="mapOverlay topLeft">
@@ -1494,6 +1516,25 @@ export function App() {
             <span>
               {measuredCoverageCount.toLocaleString("de-DE")} Messfelder · Bewertung: {routeAssessment}
             </span>
+          </div>
+
+          <div className={`mapOverlay pathCaptureControl ${isPathCaptureEnabled ? "active" : ""}`}>
+            <button className="commandButton primary" onClick={() => setIsPathCaptureEnabled((enabled) => !enabled)} type="button">
+              <MapPinned size={16} />
+              {isPathCaptureEnabled ? "Markierung beenden" : "Weg markieren"}
+            </button>
+            <span>
+              {draftWaypoints.length === 0
+                ? "Erster Klick setzt den Startpunkt"
+                : isPathCaptureEnabled
+                  ? "Weitere Klicks ergänzen den Weg; der letzte Punkt ist das Ende"
+                  : `${draftWaypoints.length} Punkte · Start und Ende markiert`}
+            </span>
+            {draftWaypoints.length > 0 && (
+              <button className="textButton" onClick={() => { setDraftWaypoints([]); setIsPathCaptureEnabled(true); }} type="button">
+                Weg neu markieren
+              </button>
+            )}
           </div>
 
           <button className="mapOverlay overviewOpenButton" onClick={() => setIsMissionOverviewOpen(true)} type="button">
@@ -1516,7 +1557,7 @@ export function App() {
         </div>
 
         <section className="playbackBar">
-          <button className="primaryIconButton" onClick={() => setIsPlaying((playing) => !playing)} aria-label={isPlaying ? "Pause" : "Play"}>
+          <button className="primaryIconButton" disabled={!hasActiveMissionPath} onClick={() => setIsPlaying((playing) => !playing)} aria-label={isPlaying ? "Pause" : "Play"}>
             {isPlaying ? <Pause size={18} /> : <Play size={18} />}
           </button>
           <div className="timelineBlock">
@@ -2020,11 +2061,22 @@ function AdminMapViewport({ bounds }: { bounds: [[number, number], [number, numb
   const map = useMap();
 
   useEffect(() => {
-    if (bounds) {
-      map.fitBounds(bounds, { padding: [52, 52], animate: true, maxZoom: 15 });
-      return;
-    }
-    map.setView([48.78, 9.16], 8, { animate: true });
+    const fit = () => {
+      if (!bounds) {
+        map.setView([48.78, 9.16], 8, { animate: true });
+        return;
+      }
+      const size = map.getSize();
+      map.fitBounds(bounds, {
+        paddingTopLeft: [Math.round(size.x * 0.08), Math.round(size.y * 0.1)],
+        paddingBottomRight: [Math.round(size.x * 0.08), Math.round(size.y * 0.1)],
+        animate: true,
+        maxZoom: 15,
+      });
+    };
+    fit();
+    map.on("resize", fit);
+    return () => { map.off("resize", fit); };
   }, [bounds, map]);
 
   return null;
@@ -2088,6 +2140,7 @@ function BadenWuerttembergMapPage({
   const [showMunicipalityBoundaries, setShowMunicipalityBoundaries] = useState(true);
   const [showForestBoundaries, setShowForestBoundaries] = useState(true);
   const selectedManagedArea = forestAreas.find((area) => area.id === selectedAreaId) ?? null;
+  const focusedManagedArea = forestAreas.find((area) => area.id === focusAreaId) ?? null;
   const [drawingMunicipalityId, setDrawingMunicipalityId] = useState(forestAreas.find((area) => area.id === focusAreaId)?.municipalityId ?? "");
   const [mapManagementError, setMapManagementError] = useState<string | null>(null);
   const selectedDistrict = districts?.features.find((feature) => feature.properties.ID_3 === selectedDistrictId) ?? null;
@@ -2111,7 +2164,10 @@ function BadenWuerttembergMapPage({
   const selectedDistrictBounds = useMemo(() => (selectedDistrict ? calculateFeatureBounds(selectedDistrict) : null), [selectedDistrict]);
   const selectedGemeindeBounds = useMemo(() => (selectedGemeinde ? calculateFeatureBounds(selectedGemeinde) : null), [selectedGemeinde]);
   const allDistrictBounds = useMemo(() => districts ? calculateFeaturesBounds(districts.features) : null, [districts]);
-  const selectedAreaBounds = useMemo(() => focusAreaId && selectedManagedArea ? calculateCoordinateBounds(selectedManagedArea.polygon) : null, [focusAreaId, selectedManagedArea]);
+  const selectedAreaBounds = useMemo(
+    () => focusedManagedArea ? calculateCoordinateBounds(focusedManagedArea.polygon) : null,
+    [focusedManagedArea],
+  );
   const activeAdminMapBounds = selectedAreaBounds ?? selectedGemeindeBounds ?? (isDistrictFocusMode ? selectedDistrictBounds : allDistrictBounds);
   const effectiveAdminBaseMapId: BaseMapId = isDistrictFocusMode ? adminBaseMapId : "street";
   const gemeindePopulationTotal = useMemo(
@@ -2197,6 +2253,15 @@ function BadenWuerttembergMapPage({
   }, [focusAreaId]);
 
   useEffect(() => {
+    if (!focusedManagedArea || focusedManagedArea.boundaryStatus !== "pending") return;
+    setEditingMapAreaId(focusedManagedArea.id);
+    setDraftForestName(focusedManagedArea.name);
+    setDraftForestPolygon([]);
+    setDrawingMunicipalityId(focusedManagedArea.municipalityId ?? "");
+    setIsForestDrawingEnabled(true);
+  }, [focusedManagedArea]);
+
+  useEffect(() => {
     if (!focusAreaId || !districts) return;
     const focusArea = forestAreas.find((area) => area.id === focusAreaId);
     if (!focusArea) return;
@@ -2235,7 +2300,7 @@ function BadenWuerttembergMapPage({
     layer.bindTooltip(feature.properties.NAME_3, {
       className: "adminDistrictLabel",
       direction: "center",
-      permanent: false,
+      permanent: !isDistrictFocusMode,
       opacity: 0.92,
     });
     layer.on({
@@ -2314,6 +2379,7 @@ function BadenWuerttembergMapPage({
       scopeId: currentForestScope.id,
       scopeName: currentForestScope.name,
       polygon: draftForestPolygon,
+      boundaryStatus: "defined",
       hectares: calculatePolygonHectares(draftForestPolygon),
       focus: existing?.focus ?? "Allgemeines Waldmonitoring",
       description: existing?.description ?? "Auf der Verwaltungskarte eingezeichnet",
@@ -2368,8 +2434,8 @@ function BadenWuerttembergMapPage({
       </header>
 
       <main className="adminMapLayout">
-        {feedback && <div className={`managementFeedback adminFeedback ${feedback.tone}`} role={feedback.tone === "error" ? "alert" : "status"}>{feedback.message}</div>}
         <section className="adminMapPanel">
+          {feedback && <div className={`managementFeedback adminFeedback ${feedback.tone}`} role={feedback.tone === "error" ? "alert" : "status"}>{feedback.message}</div>}
           <MapContainer center={[48.78, 9.16]} zoom={8} minZoom={7} maxZoom={19} scrollWheelZoom className={`adminMap ${!isDistrictFocusMode ? "adminMapVectorOverview" : ""}`}>
             <AdminMapViewport bounds={activeAdminMapBounds} />
             <ForestDrawingCapture enabled={isForestDrawingEnabled} onPick={addDraftForestPoint} />
@@ -2402,7 +2468,7 @@ function BadenWuerttembergMapPage({
                 key={area.id}
                 positions={area.polygon.map(toLatLng)}
                 eventHandlers={{ click: () => onSelectArea(area.id) }}
-                pathOptions={{ color: area.id === selectedAreaId ? "#fbbf24" : "#22c55e", fillColor: "#16a34a", fillOpacity: area.id === selectedAreaId ? 0.38 : 0.24, weight: area.id === selectedAreaId ? 4 : 2 }}
+                pathOptions={{ color: area.id === selectedAreaId ? "#fbbf24" : "#22c55e", fillColor: "#16a34a", fillOpacity: area.boundaryStatus === "pending" ? 0.08 : area.id === selectedAreaId ? 0.38 : 0.24, weight: area.id === selectedAreaId ? 4 : 2, dashArray: area.boundaryStatus === "pending" ? "7 6" : undefined }}
               >
                 <Tooltip permanent direction="center">
                   {area.name}
@@ -2562,8 +2628,8 @@ function BadenWuerttembergMapPage({
                               <FolderOpen size={14} />
                             </button>
                           </span>
-                          <small>{area.hectares.toLocaleString("de-DE")} ha · {area.status} · {area.scopeName}</small>
-                          <button className="textButton" onClick={() => beginAreaRedraw(area)} type="button">Grenze/Name bearbeiten</button>
+                          <small>{area.boundaryStatus === "pending" ? "Grenze ausstehend" : `${area.hectares.toLocaleString("de-DE")} ha`} · {area.status} · {area.scopeName}</small>
+                          <button className="textButton" onClick={() => beginAreaRedraw(area)} type="button">{area.boundaryStatus === "pending" ? "Grenze auf Karte einzeichnen" : "Grenze/Name bearbeiten"}</button>
                         </div>
                       ))
                     )}
@@ -2571,7 +2637,7 @@ function BadenWuerttembergMapPage({
                 </div>
               )}
               <div className="adminDistrictActions">
-                <button className="commandButton primary" onClick={onOpenGeo} disabled={!selectedManagedArea} type="button">
+                <button className="commandButton primary" onClick={onOpenGeo} disabled={!selectedManagedArea || selectedManagedArea.boundaryStatus === "pending"} type="button">
                   <MapPinned size={16} />
                   Gebiet in GeoID öffnen
                 </button>
@@ -2604,7 +2670,6 @@ function PortalPage({
   indexDefinitions,
   onSelectMunicipality,
   onOpenMission,
-  onOpenAreaGeo,
   onOpenAreaMap,
   onCreateMunicipality,
   onEditMunicipality,
@@ -2639,7 +2704,6 @@ function PortalPage({
   indexDefinitions: IndexDefinitionDemo[];
   onSelectMunicipality: (municipalityId: string) => void;
   onOpenMission: (mission: CustomerMissionTemplate, startProcessing: boolean) => void;
-  onOpenAreaGeo: (areaId: string) => void;
   onOpenAreaMap: (areaId: string) => void;
   onCreateMunicipality: () => void;
   onEditMunicipality: (municipalityId: string) => void;
@@ -2807,13 +2871,13 @@ function PortalPage({
                 <div className="areaList">
                   {selectedMunicipality.areas.map((area) => (
                     <div key={area.id} className={`areaRow ${area.status}`}>
-                      <button className="areaRowMain" onClick={() => onOpenAreaGeo(area.id)} type="button">
+                      <button className="areaRowMain" onClick={() => onOpenAreaMap(area.id)} type="button" title="Einsatzgebiet auf der Karte fokussieren">
                         <strong>{area.name}</strong>
                         <span>{area.focus}</span>
                       </button>
-                      <small>{area.hectares} ha · {area.status}</small>
+                      <small>{area.boundaryStatus === "pending" ? "Grenze ausstehend" : `${area.hectares} ha`} · {area.status}</small>
                       <div className="areaRowActions">
-                        <button className="iconButton" onClick={() => onOpenAreaMap(area.id)} title="Auf Karte öffnen" aria-label={`${area.name} auf Karte öffnen`} type="button"><MapPinned size={14} /></button>
+                        <button className={area.boundaryStatus === "pending" ? "commandButton boundaryAction" : "iconButton"} onClick={() => onOpenAreaMap(area.id)} title={area.boundaryStatus === "pending" ? "Grenze auf Karte einzeichnen" : "Auf Karte öffnen"} aria-label={`${area.name} ${area.boundaryStatus === "pending" ? "Grenze auf Karte einzeichnen" : "auf Karte öffnen"}`} type="button"><MapPinned size={14} />{area.boundaryStatus === "pending" && "Grenze auf Karte einzeichnen"}</button>
                         <button className="iconButton" onClick={() => onEditArea(area.id)} title="Bearbeiten" aria-label={`${area.name} bearbeiten`} type="button"><Wrench size={14} /></button>
                         <button className="iconButton danger" onClick={() => void onArchiveArea(area.id)} title="Archivieren" aria-label={`${area.name} archivieren`} type="button"><FolderOpen size={14} /></button>
                       </div>
@@ -2838,10 +2902,11 @@ function PortalPage({
                       <MapPinned size={16} />
                       GeoID öffnen
                     </button>
-                    <button className="commandButton primary" onClick={() => onOpenMission(missionTemplate, true)} type="button">
+                    <button className="commandButton primary" onClick={() => onOpenMission(missionTemplate, true)} disabled={!hasDefinedMissionPath(missionTemplate)} title={!hasDefinedMissionPath(missionTemplate) ? "Noch kein Missionspfad definiert" : undefined} type="button">
                       <Play size={16} />
                       Daten verarbeiten
                     </button>
+                    {!hasDefinedMissionPath(missionTemplate) && <small className="missionPathMissing">Noch kein Missionspfad definiert</small>}
                   </div>
                 ))}
               </div>

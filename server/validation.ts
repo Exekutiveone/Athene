@@ -40,6 +40,7 @@ export function ensureDeploymentArea(value: unknown): DeploymentArea {
   const area = normalizeDeploymentArea(value as DeploymentArea);
   if (!area?.id || !area.name || !area.scopeId || !area.scopeName || !area.createdAt || !Array.isArray(area.polygon) || area.polygon.length < 3) invalid("deployment area");
   if (!areaStatuses.includes(area.status as never)) invalid("area status");
+  if (!["pending", "defined"].includes(area.boundaryStatus)) invalid("area boundaryStatus");
   if (!origins.includes(area.dataOrigin as never) || !recordStatuses.includes(area.dataStatus as never)) invalid("area provenance");
   if (!area.polygon.every((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))) invalid("area polygon");
   if (area.linkageStatus === "linked" && !area.municipalityId) invalid("linked area municipalityId");
@@ -65,6 +66,10 @@ export function ensurePlannedMission(value: unknown): PlannedMissionRecord {
   const record = value as PlannedMissionRecord;
   if (!record?.id || !record.municipalityId || !record.areaId || !record.title || !record.params || !record.createdAt) invalid("planned mission");
   if (!missionPriorities.includes(record.priority as never) || !missionStatuses.includes(record.status as never)) invalid("planned mission enum");
+  if (record.missionPath !== undefined && record.missionPath !== null) {
+    if (!record.missionPath.name || !Array.isArray(record.missionPath.waypoints)) invalid("planned mission path");
+    if (!record.missionPath.waypoints.every((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))) invalid("planned mission path coordinates");
+  }
   return record;
 }
 

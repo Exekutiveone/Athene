@@ -16,7 +16,15 @@ test("invalid enums are rejected instead of silently persisted", () => {
   assert.throws(() => ensureMunicipality({ ...seedMunicipalities[0], type: "Bundesland" }), /Invalid municipality enum/);
   assert.throws(() => ensureStakeholder({ ...seedStakeholders[0], access: "Root" }), /Invalid stakeholder enum/);
   assert.throws(() => ensureDeploymentArea({ ...seedDeploymentAreas[0], status: "done" }), /Invalid area status/);
+  assert.throws(() => ensureDeploymentArea({ ...seedDeploymentAreas[0], boundaryStatus: "guessed" }), /Invalid area boundaryStatus/);
   assert.throws(() => ensurePlannedMission({ ...seedPlannedMissions[0], priority: "sofort" }), /Invalid planned mission enum/);
+});
+
+test("pending areas and explicit mission paths pass boundary validation", () => {
+  assert.equal(ensureDeploymentArea({ ...seedDeploymentAreas[0], boundaryStatus: "pending" }).boundaryStatus, "pending");
+  const mission = ensurePlannedMission({ ...seedPlannedMissions[0], missionPath: null });
+  assert.equal(mission.missionPath, null);
+  assert.throws(() => ensurePlannedMission({ ...seedPlannedMissions[0], missionPath: { name: "Defekt", waypoints: [{ lat: Number.NaN, lng: 9 }] } }), /Invalid planned mission path coordinates/);
 });
 
 test("mission linkage and coverage invariants are enforced", () => {

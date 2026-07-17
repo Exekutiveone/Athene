@@ -210,6 +210,7 @@ export interface DeploymentArea {
   scopeName: string;
   polygon: Coordinate[];
   hectares: number;
+  boundaryStatus: "pending" | "defined";
   focus: string;
   description: string;
   status: ManagementStatus;
@@ -238,6 +239,8 @@ export interface PlannedMissionRecord {
   seed: string;
   scenarioName: string;
   pathName: string;
+  /** undefined = legacy/generated route, null = explicitly no route. */
+  missionPath?: { name: string; waypoints: Waypoint[] } | null;
   params: ScenarioParams;
   createdAt: string;
   updatedAt: string;

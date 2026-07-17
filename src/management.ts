@@ -128,6 +128,7 @@ export function normalizeDeploymentArea(value: Partial<DeploymentArea> & { id: s
     scopeName: value.scopeName ?? "Nicht zugeordnet",
     polygon: value.polygon,
     hectares: value.hectares && value.hectares > 0 ? value.hectares : calculatePolygonHectares(value.polygon),
+    boundaryStatus: value.boundaryStatus ?? "defined",
     focus: value.focus ?? "Allgemeines Waldmonitoring",
     description: value.description ?? "",
     status: value.status ?? "planung",
@@ -140,6 +141,10 @@ export function normalizeDeploymentArea(value: Partial<DeploymentArea> & { id: s
     updatedAt: value.updatedAt ?? createdAt,
     archivedAt: value.archivedAt,
   };
+}
+
+export function hasDefinedMissionPath(mission: Pick<PlannedMissionRecord, "missionPath">): boolean {
+  return mission.missionPath === undefined || Boolean(mission.missionPath && mission.missionPath.waypoints.length >= 2);
 }
 
 function municipality(id: string, name: string, type: MunicipalityRecord["type"], region: string, population: number, lat: number, lng: number, administrativeScopeId: string): MunicipalityRecord {

@@ -6,6 +6,7 @@ import {
   aggregateAreaRecords,
   calculatePolygonHectares,
   calculateRouteCoverageShare,
+  hasDefinedMissionPath,
   normalizeDeploymentArea,
   resolveManagementSelection,
   seedDeploymentAreas,
@@ -103,6 +104,22 @@ test("a newly created area survives normalization and is immediately selectable"
     { areaId: area.id, missionId: null },
   );
   assert.deepEqual(selected, { municipalityId: "mun-esslingen", areaId: "area-created", missionId: null });
+});
+
+test("legacy and pending area boundaries normalize without changing the area identity", () => {
+  const legacy = normalizeDeploymentArea({ id: "legacy", name: "Legacy", polygon: [{ lat: 48, lng: 9 }, { lat: 48.01, lng: 9 }, { lat: 48.01, lng: 9.01 }] });
+  assert.equal(legacy.boundaryStatus, "defined");
+  const pending = normalizeDeploymentArea({ ...legacy, id: "pending", boundaryStatus: "pending" });
+  const drawn = normalizeDeploymentArea({ ...pending, boundaryStatus: "defined", polygon: [{ lat: 48.1, lng: 9.1 }, { lat: 48.11, lng: 9.1 }, { lat: 48.11, lng: 9.11 }] });
+  assert.equal(drawn.id, pending.id);
+  assert.equal(drawn.boundaryStatus, "defined");
+});
+
+test("new missions require a usable explicit path while legacy missions remain compatible", () => {
+  assert.equal(hasDefinedMissionPath({}), true);
+  assert.equal(hasDefinedMissionPath({ missionPath: null }), false);
+  assert.equal(hasDefinedMissionPath({ missionPath: { name: "Zu kurz", waypoints: [] } }), false);
+  assert.equal(hasDefinedMissionPath({ missionPath: { name: "Route", waypoints: [{ id: "a", sequence: 1, minute: 0, speedKmh: 2, lat: 48, lng: 9 }, { id: "b", sequence: 2, minute: 1, speedKmh: 2, lat: 48.01, lng: 9.01 }] } }), true);
 });
 
 test("unknown legacy scopes remain unassigned instead of leaking into Esslingen", () => {
