@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.tsbuildinfo
+dev-server.log
+api-server.log
+web-server-*.log
+athene-start*.log
+vite.config.js
+vite.config.d.ts
+.data/
+server-dist/
