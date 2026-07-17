@@ -117,7 +117,7 @@ export function generateCopernicusDemoAnalysis(scenario: Scenario): CopernicusAn
       date: "2026-07-14",
       collection: "Sentinel-2 L2A",
       cloudCover,
-      source: "Copernicus Data Space / Sentinel Hub demo fallback",
+      source: "Athene synthetischer Sentinel-2-Demofallback",
     },
     ndviMean,
     ndmiMean,
@@ -156,24 +156,38 @@ function generateCopernicusCells(scenario: Scenario): CoverageCell[] {
       const ndmi = round(clamp(0.32 - dryness * 0.58 + canopy * 0.6, -0.26, 0.48), 2);
       const nbr = round(clamp(0.62 - scenario.stress.disturbance * 0.2 - scenario.stress.stormDamage * 0.18 - dryness * 0.2 + canopy * 0.5, 0.08, 0.78), 2);
       const confidence = round(clamp(0.78 - Math.abs(east - 0.5) * 0.1 - scenario.weather.cloudCover * 0.18, 0.5, 0.86), 2);
+      const inside = pointInPolygon({ lat, lng }, scenario.forestArea.polygon);
       const common = {
         lat,
         lng,
         unit: "index",
-        dataOrigin: "external" as const,
-        dataStatus: "modeled" as const,
-        confidence,
+        dataOrigin: "synthetic" as const,
+        dataStatus: (inside ? "modeled" : "unknown") as "modeled" | "unknown",
+        confidence: inside ? confidence : 0,
         distanceToRouteMeters: 0,
         timestamp: "2026-07-14T10:15:00.000Z",
         sourceObservationId: "copernicus-sentinel-2-l2a",
+        source: "Athene synthetischer Sentinel-2-Demofallback",
+        modelVersion: "copernicus-demo-0.1.0",
       };
-      cells.push({ ...common, id: `copernicus-ndvi-${row}-${col}`, layerId: "copernicusNdvi", value: ndvi });
-      cells.push({ ...common, id: `copernicus-ndmi-${row}-${col}`, layerId: "copernicusNdmi", value: ndmi });
-      cells.push({ ...common, id: `copernicus-nbr-${row}-${col}`, layerId: "copernicusNbr", value: nbr });
+      cells.push({ ...common, id: `copernicus-ndvi-${row}-${col}`, layerId: "copernicusNdvi", value: inside ? ndvi : null });
+      cells.push({ ...common, id: `copernicus-ndmi-${row}-${col}`, layerId: "copernicusNdmi", value: inside ? ndmi : null });
+      cells.push({ ...common, id: `copernicus-nbr-${row}-${col}`, layerId: "copernicusNbr", value: inside ? nbr : null });
     }
   }
 
   return cells;
+}
+
+function pointInPolygon(point: { lat: number; lng: number }, polygon: { lat: number; lng: number }[]): boolean {
+  let inside = false;
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index, index += 1) {
+    const a = polygon[index];
+    const b = polygon[previous];
+    const intersects = a.lng > point.lng !== b.lng > point.lng && point.lat < ((b.lat - a.lat) * (point.lng - a.lng)) / (b.lng - a.lng) + a.lat;
+    if (intersects) inside = !inside;
+  }
+  return inside;
 }
 
 function buildEvalscript(index: "NDVI" | "NDMI" | "NBR"): string {

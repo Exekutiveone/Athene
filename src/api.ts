@@ -1,4 +1,4 @@
-import { ForestDrawingArea, MissionRecord, SavedPathRecord, SavedScenarioRecord } from "./domain";
+import { DeploymentArea, MissionRecord, MunicipalityRecord, PlannedMissionRecord, SavedPathRecord, SavedScenarioRecord, StakeholderRecord } from "./domain";
 
 const apiBase = "/api";
 
@@ -47,19 +47,39 @@ export async function deleteMissionRecord(recordId: string): Promise<void> {
   await requestEmpty(`/mission-records/${encodeURIComponent(recordId)}`, { method: "DELETE" });
 }
 
-export async function fetchForestAreas(): Promise<ForestDrawingArea[]> {
-  return requestJson<ForestDrawingArea[]>("/forest-areas");
+export async function fetchForestAreas(): Promise<DeploymentArea[]> {
+  return requestJson<DeploymentArea[]>("/deployment-areas");
 }
 
-export async function saveForestArea(area: ForestDrawingArea): Promise<ForestDrawingArea> {
-  return requestJson<ForestDrawingArea>(`/forest-areas/${encodeURIComponent(area.id)}`, {
+export async function saveForestArea(area: DeploymentArea): Promise<DeploymentArea> {
+  return requestJson<DeploymentArea>(`/deployment-areas/${encodeURIComponent(area.id)}`, {
     method: "PUT",
     body: JSON.stringify(area),
   });
 }
 
-export async function deleteForestArea(areaId: string): Promise<void> {
-  await requestEmpty(`/forest-areas/${encodeURIComponent(areaId)}`, { method: "DELETE" });
+export async function fetchMunicipalities(): Promise<MunicipalityRecord[]> {
+  return requestJson<MunicipalityRecord[]>("/municipalities");
+}
+
+export async function saveMunicipality(record: MunicipalityRecord): Promise<MunicipalityRecord> {
+  return requestJson<MunicipalityRecord>(`/municipalities/${encodeURIComponent(record.id)}`, { method: "PUT", body: JSON.stringify(record) });
+}
+
+export async function fetchStakeholders(): Promise<StakeholderRecord[]> {
+  return requestJson<StakeholderRecord[]>("/stakeholders");
+}
+
+export async function saveStakeholder(record: StakeholderRecord): Promise<StakeholderRecord> {
+  return requestJson<StakeholderRecord>(`/stakeholders/${encodeURIComponent(record.id)}`, { method: "PUT", body: JSON.stringify(record) });
+}
+
+export async function fetchPlannedMissions(): Promise<PlannedMissionRecord[]> {
+  return requestJson<PlannedMissionRecord[]>("/planned-missions");
+}
+
+export async function savePlannedMission(record: PlannedMissionRecord): Promise<PlannedMissionRecord> {
+  return requestJson<PlannedMissionRecord>(`/planned-missions/${encodeURIComponent(record.id)}`, { method: "PUT", body: JSON.stringify(record) });
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {

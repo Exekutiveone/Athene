@@ -6,9 +6,10 @@
   "scripts": {
     "dev": "concurrently -n api,web -c cyan,green \"npm:dev:api\" \"npm:dev:web\"",
     "dev:web": "vite --host 127.0.0.1",
-    "dev:api": "tsx watch server/index.ts",
+    "dev:api": "node --watch --import tsx server/index.ts",
     "build": "tsc --noEmit && tsc -p tsconfig.server.json && vite build",
-    "start:api": "node server-dist/index.js",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "start:api": "node server-dist/server/index.js",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {

@@ -69,6 +69,8 @@ export interface Scenario {
 
 export interface Mission {
   id: string;
+  areaId: string;
+  municipalityId: string;
   vehicle: string;
   startsAt: string;
   durationMinutes: number;
@@ -133,6 +135,8 @@ export interface CoverageCell extends Coordinate {
   distanceToRouteMeters: number;
   timestamp: string;
   sourceObservationId: string;
+  source: string;
+  modelVersion: string | null;
 }
 
 export interface IndicatorDefinition {
@@ -169,25 +173,98 @@ export interface SavedScenarioRecord {
   waypoints: Waypoint[];
 }
 
-export interface ForestDrawingArea {
+export type ManagementStatus = "aktiv" | "planung" | "review" | "archiviert";
+
+export interface StakeholderRecord {
+  id: string;
+  municipalityId: string;
+  name: string;
+  role: string;
+  access: "Admin" | "Operator" | "Viewer";
+  status: "active" | "archived";
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+}
+
+export interface MunicipalityRecord {
   id: string;
   name: string;
+  type: "Gemeinde" | "Stadt" | "Landkreis";
+  region: string;
+  population: number;
+  center: Coordinate;
+  administrativeScopeId?: string | null;
+  status: "active" | "archived";
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+}
+
+/** The one canonical, persisted polygon used by portal, map and GeoID. */
+export interface DeploymentArea {
+  id: string;
+  name: string;
+  municipalityId: string | null;
   scopeId: string;
   scopeName: string;
   polygon: Coordinate[];
+  hectares: number;
+  focus: string;
+  description: string;
+  status: ManagementStatus;
+  dataOrigin: DataOrigin;
+  dataStatus: DataStatus;
+  source: string;
+  confidence: number | null;
+  linkageStatus: "linked" | "review-needed";
   createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+}
+
+/** @deprecated Kept as a source-compatible alias for old persisted records. */
+export type ForestDrawingArea = DeploymentArea;
+
+export interface PlannedMissionRecord {
+  id: string;
+  municipalityId: string;
+  areaId: string;
+  title: string;
+  objective: string;
+  requestedAt: string;
+  priority: "normal" | "hoch" | "kritisch";
+  status: "entwurf" | "geplant" | "bereit" | "processing" | "abgeschlossen";
+  seed: string;
+  scenarioName: string;
+  pathName: string;
+  params: ScenarioParams;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface MissionRecord {
   id: string;
   missionId: string;
+  areaId: string | null;
+  municipalityId: string | null;
   scenarioName: string;
   forestAreaName: string;
   pathName: string;
   createdAt: string;
+  missionStartedAt: string | null;
+  missionCompletedAt: string | null;
+  surveyedAt: string | null;
   seed: string;
   generatorVersion: string;
   summary: string;
   metrics: Record<string, string | number>;
   recommendations: string[];
+  dataOrigin: DataOrigin;
+  dataStatus: DataStatus;
+  confidence: number | null;
+  source: string;
+  coverageShare: number | null;
+  unknownShare: number | null;
+  linkageStatus: "linked" | "review-needed";
 }

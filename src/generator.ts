@@ -12,6 +12,7 @@ import {
   Waypoint,
 } from "./domain";
 import { copernicusLayerDefinitions } from "./copernicus";
+import { stableMissionId } from "./management";
 
 const GENERATOR_VERSION = "athene-mockgen-0.2.0";
 const SCENARIO_VERSION = "scenario-0.1";
@@ -96,11 +97,18 @@ export function generateScenario(seed: string, params: ScenarioParams = defaultS
   };
 }
 
-export function generateMission(scenario: Scenario): Mission {
+export function generateMission(
+  scenario: Scenario,
+  context: { areaId?: string; municipalityId?: string; startsAt?: string } = {},
+): Mission {
+  const startsAt = context.startsAt ?? "2026-07-16T13:00:00.000Z";
+  const areaId = context.areaId ?? scenario.forestArea.id;
   return {
-    id: "mission-athene-es-001-202607",
+    id: stableMissionId(areaId, scenario.seed, startsAt),
+    areaId,
+    municipalityId: context.municipalityId ?? "mun-esslingen",
     vehicle: "Artemis UGV-02",
-    startsAt: "2026-07-16T13:00:00.000Z",
+    startsAt,
     durationMinutes: 75,
     path: scenario.forestPath,
     dataOrigin: "synthetic",
@@ -190,6 +198,8 @@ export function generateCoverageLayer(observations: Observation[], layer: LayerD
         distanceToRouteMeters: offset.meters,
         timestamp: observation.timestamp,
         sourceObservationId: observation.id,
+        source: observation.source,
+        modelVersion: observation.generatorVersion,
       });
     });
   });
@@ -234,6 +244,8 @@ export function generateRasterCoverageLayer(observations: Observation[], layer: 
           distanceToRouteMeters: Math.abs(offsetMeters),
           timestamp: t < 0.5 ? start.timestamp : end.timestamp,
           sourceObservationId: t < 0.5 ? start.id : end.id,
+          source: "Athene Messkorridor-Interpolation",
+          modelVersion: start.generatorVersion,
         });
       });
     }

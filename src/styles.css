@@ -7,6 +7,126 @@
   text-rendering: optimizeLegibility;
 }
 
+/* Coherent management, area and regional MVP */
+.managementFeedback {
+  margin: 12px 24px 0;
+  padding: 10px 14px;
+  border: 1px solid #99b8af;
+  border-radius: 10px;
+  background: #edf7f4;
+  color: #123d35;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.managementFeedback.error { border-color: #e6a5a5; background: #fff2f2; color: #8a1f1f; }
+.managementFeedback.loading { border-color: #d5bd75; background: #fff9e7; color: #765a08; }
+.adminFeedback { grid-column: 1 / -1; margin: 0; }
+
+.panelTitleActions,
+.areaRowActions,
+.dialogActions,
+.contextModeSwitch,
+.regionalControls,
+.regionalLegend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panelTitleActions { justify-content: space-between; margin-bottom: 10px; }
+.panelTitleActions .panelTitle { margin-bottom: 0; }
+
+.areaRow {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.areaRowMain,
+.forestAreaSelect,
+.textButton {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.areaRowMain { display: grid; gap: 4px; min-width: 0; }
+.areaRowMain:hover strong, .forestAreaSelect:hover strong, .textButton:hover { color: #0f766e; }
+.textButton { margin-top: 5px; color: #0f766e; font-size: 11px; font-weight: 800; }
+.forestAreaList > div.selected { outline: 2px solid #fbbf24; background: #fffbea; }
+
+.dialogBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(10 32 27 / 58%);
+  backdrop-filter: blur(3px);
+}
+
+.managementDialog {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 22px;
+  border: 1px solid #cbd8d2;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 24px 80px rgb(7 39 31 / 25%);
+}
+
+.managementDialog form { display: grid; gap: 14px; }
+.managementDialog textarea { min-height: 90px; resize: vertical; }
+.dialogActions { justify-content: flex-end; margin-top: 6px; }
+.dialogHint, .provenanceNote { margin: 0; padding: 10px 12px; border-left: 3px solid #0f766e; background: #edf7f4; color: #36534d; font-size: 12px; line-height: 1.5; }
+
+.geoContextPanel { background: #eef8f5; }
+.contextModeSwitch { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border: 1px solid #b8cbc5; border-radius: 9px; background: #fff; }
+.contextModeSwitch button { border: 0; border-radius: 6px; padding: 8px 10px; background: transparent; color: #31524a; font-weight: 800; cursor: pointer; }
+.contextModeSwitch button.active { background: #0f766e; color: #fff; }
+.geoContextPanel small { display: block; margin-top: 8px; line-height: 1.35; color: #536c65; }
+
+.areaContextMain,
+.regionalOverviewMain { display: grid; gap: 18px; padding: 24px; min-height: 0; }
+.contextBreadcrumb { padding: 10px 14px; border: 1px solid #d3ddd8; border-radius: 10px; background: #fff; color: #35574e; font-size: 13px; font-weight: 800; }
+.contextBreadcrumb span { padding: 0 8px; color: #8da39d; }
+.areaContextMain > .contextModeSwitch { width: min(420px, 100%); }
+.areaContextGrid { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(300px, 0.8fr); gap: 16px; min-height: 500px; }
+.regionalMapCard, .areaAggregatePanel { overflow: hidden; border: 1px solid #cbd8d2; border-radius: 14px; background: #fff; }
+.regionalMap { width: 100%; height: 100%; min-height: 500px; }
+.areaAggregatePanel { align-self: start; padding: 20px; }
+.areaAggregatePanel h2 { margin: 5px 0 16px; }
+.areaAggregatePanel .statusGrid { grid-template-columns: 1fr 1fr; }
+.areaAggregatePanel .provenanceNote { margin-top: 16px; }
+
+.regionalControls { flex-wrap: wrap; padding: 14px; border: 1px solid #cbd8d2; border-radius: 12px; background: #fff; }
+.regionalControls label { display: grid; gap: 4px; color: #4b665f; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.regionalControls select { min-width: 170px; }
+.regionalLegend { margin-left: auto; flex-wrap: wrap; font-size: 12px; font-weight: 700; }
+.regionalLegend span { display: flex; align-items: center; gap: 5px; }
+.regionalLegend i { width: 14px; height: 14px; border-radius: 4px; }
+.legendNoData { background: #6b7280; }
+.legendLow { background: #16a34a; }
+.legendHigh { background: #dc2626; }
+.regionalOverviewMain > .regionalMapCard { min-height: 620px; }
+
+.adminMapVectorOverview { background: radial-gradient(circle at 50% 45%, #eaf3ef 0%, #d8e7e1 72%, #c9d9d2 100%); }
+.adminMapVectorOverview .leaflet-control-attribution { display: none; }
+
+@media (max-width: 900px) {
+  .areaContextGrid { grid-template-columns: 1fr; }
+  .regionalControls { align-items: stretch; }
+  .regionalLegend { margin-left: 0; }
+  .areaRow { grid-template-columns: 1fr auto; }
+  .areaRowActions { grid-column: 1 / -1; }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -2339,4 +2459,71 @@ input[type="range"] {
   .gridTwo {
     grid-template-columns: 1fr;
   }
+}
+
+/* Keep management row layout after legacy portal rules. */
+.syncQueueStatus,
+.inlineError {
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.syncQueueStatus {
+  border: 1px solid #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.inlineError {
+  margin: 0;
+  border: 1px solid #fca5a5;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.municipalityButtonWrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.municipalityButtonWrap .municipalityButton {
+  width: 100%;
+}
+
+.municipalityButtonWrap.active .municipalityButton {
+  border-color: #0f766e;
+  background: #e9f6f3;
+}
+
+.entityActions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.areaRow {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.areaRowMain {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.areaRowActions {
+  display: flex !important;
+  grid-auto-flow: column;
+  gap: 6px !important;
+}
+
+@media (max-width: 900px) {
+  .areaRow { grid-template-columns: minmax(0, 1fr) auto; }
+  .areaRowActions { grid-column: 1 / -1; }
 }
