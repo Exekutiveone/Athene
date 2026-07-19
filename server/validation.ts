@@ -1,5 +1,6 @@
 import { DeploymentArea, MissionRecord, MunicipalityRecord, PlannedMissionRecord, SavedPathRecord, SavedScenarioRecord, StakeholderRecord } from "../src/domain.js";
 import { normalizeDeploymentArea } from "../src/management.js";
+import { createMissionPath, flattenRouteSegments } from "../src/routeGeometry.js";
 
 const areaStatuses = ["aktiv", "planung", "review", "archiviert"] as const;
 const recordStatuses = ["measured", "simulated", "derived", "interpolated", "modeled", "unknown"] as const;
@@ -68,7 +69,16 @@ export function ensurePlannedMission(value: unknown): PlannedMissionRecord {
   if (!missionPriorities.includes(record.priority as never) || !missionStatuses.includes(record.status as never)) invalid("planned mission enum");
   if (record.missionPath !== undefined && record.missionPath !== null) {
     if (!record.missionPath.name || !Array.isArray(record.missionPath.waypoints)) invalid("planned mission path");
-    if (!record.missionPath.waypoints.every((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))) invalid("planned mission path coordinates");
+    const suppliedSegments = record.missionPath.segments;
+    if (suppliedSegments !== undefined && (!Array.isArray(suppliedSegments) || suppliedSegments.some((segment) => !Array.isArray(segment) || segment.length < 2))) invalid("planned mission path segments");
+    const canonicalWaypoints = suppliedSegments?.length ? flattenRouteSegments(suppliedSegments) : record.missionPath.waypoints;
+    if (!canonicalWaypoints.every((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))) invalid("planned mission path coordinates");
+    record.missionPath = createMissionPath(record.missionPath.name, canonicalWaypoints);
+  }
+  if (record.routeSummary !== undefined) {
+    const summary = record.routeSummary;
+    if (!isNullableUnit(summary.averageDryStress) || !isNullableUnit(summary.averageConfidence) || !Number.isInteger(summary.observationCount) || summary.observationCount < 1) invalid("planned mission route summary");
+    if (!summary.calculatedAt || !summary.source || !["real", "synthetic"].includes(summary.dataOrigin) || !["measured", "derived"].includes(summary.dataStatus)) invalid("planned mission route summary metadata");
   }
   return record;
 }

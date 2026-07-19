@@ -560,6 +560,15 @@ button {
   white-space: normal;
 }
 
+.portalLogin select {
+  border: 1px solid #cbd8cf;
+  border-radius: 7px;
+  padding: 6px 9px;
+  color: #173f36;
+  background: #fff;
+  font-weight: 800;
+}
+
 .boundaryAction {
   min-height: 32px;
   padding: 0 9px;
@@ -828,6 +837,515 @@ button {
 .forestAreaListHeader .iconButton {
   width: 28px;
   height: 28px;
+}
+
+.forestDetailShell {
+  min-height: 100vh;
+  color: #17231c;
+  background: #e9eeea;
+}
+
+.forestDetailHeader {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+  min-height: 78px;
+  padding: 12px 18px;
+  border-bottom: 1px solid #d4ddd5;
+  background: #fff;
+}
+
+.forestDetailHeader h1,
+.forestMissionHeading h2 {
+  margin: 0;
+}
+
+.forestDetailHeader small {
+  color: #66736a;
+}
+
+.forestDetailLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 350px;
+  height: calc(100vh - 78px);
+}
+
+.forestDetailMapPanel {
+  position: relative;
+  min-width: 0;
+}
+
+.forestDetailMap {
+  width: 100%;
+  height: 100%;
+  background: #dce4dc;
+}
+
+.forestDetailBaseMaps {
+  top: 14px;
+  right: 14px;
+  display: flex;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.forestDetailBaseMaps button {
+  border: 0;
+  border-right: 1px solid #d7dfd8;
+  padding: 9px 12px;
+  background: #fff;
+  color: #405047;
+  font-weight: 800;
+}
+
+.forestDetailBaseMaps button.active {
+  background: #0f766e;
+  color: #fff;
+}
+
+.forestDetailHeatmapSelect {
+  top: 62px;
+  right: 14px;
+  display: grid;
+  gap: 5px;
+  width: min(260px, calc(100% - 28px));
+  padding: 10px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.95);
+  color: #23443d;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.forestDetailHeatmapSelect select {
+  min-height: 34px;
+}
+
+.forestDetailHeatmapSelect small {
+  color: #66736a;
+  font-weight: 500;
+}
+
+.forestMissionTimeline {
+  right: 18px;
+  bottom: 18px;
+  left: 18px;
+  display: grid;
+  grid-template-columns: auto minmax(135px, 180px) minmax(135px, 180px) minmax(240px, 1fr);
+  gap: 12px;
+  align-items: end;
+  padding: 11px 14px;
+  border: 1px solid rgba(15, 118, 110, 0.3);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+}
+
+.forestMissionTimeline label,
+.forestMissionTimelineSlider {
+  display: grid;
+  gap: 4px;
+  color: #405047;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.forestMissionTimeline input[type="date"] {
+  min-height: 34px;
+}
+
+.forestMissionTimelineSlider input {
+  width: 100%;
+}
+
+@media (max-width: 980px) {
+  .forestMissionTimeline {
+    grid-template-columns: auto 1fr 1fr;
+  }
+  .forestMissionTimelineSlider {
+    grid-column: 1 / -1;
+  }
+}
+
+.forestMissionPanel {
+  overflow-y: auto;
+  padding: 18px;
+  border-left: 1px solid #d4ddd5;
+  background: #fff;
+}
+
+.forestMissionHeading {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.forestMissionHeading > span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #e8f4f1;
+  color: #0f766e;
+  font-weight: 900;
+}
+
+.forestMissionPlanButton {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+.missionTypeChoice {
+  display: grid;
+  gap: 9px;
+  margin-bottom: 14px;
+}
+
+.missionTypeChoice > button {
+  position: relative;
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  border: 1px solid #cfd9d1;
+  border-radius: 10px;
+  padding: 12px 38px 12px 12px;
+  text-align: left;
+  background: #f8faf8;
+}
+
+.missionTypeChoice > button:hover {
+  border-color: #0f766e;
+  background: #edf8f4;
+}
+
+.missionTypeChoice > button span,
+.missionTypeChoice > button small {
+  color: #66736a;
+  font-size: 11px;
+}
+
+.missionTypeChoice > button svg {
+  position: absolute;
+  top: 14px;
+  right: 12px;
+  color: #0f766e;
+}
+
+.missionTypeChoice > .missionTypeManual {
+  display: block;
+  padding: 9px;
+  text-align: center;
+  color: #0f766e;
+  font-weight: 800;
+}
+
+.osmPathStatus {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+  border: 1px solid #cbd8cf;
+  border-radius: 9px;
+  padding: 10px;
+  background: #f5f8f5;
+}
+
+.osmPathStatus span,
+.osmPathStatus small {
+  color: #66736a;
+  font-size: 11px;
+}
+
+.osmPathStatus.ready {
+  border-color: #9dc8bb;
+  background: #edf8f4;
+}
+
+.osmPathStatus.error {
+  border-color: #e6c4a4;
+  background: #fff8f1;
+}
+
+.osmPathStatus progress,
+.geoPathLoadProgress {
+  width: 100%;
+  height: 7px;
+  accent-color: #0f766e;
+}
+
+.osmPathAdoptButton {
+  width: 100%;
+}
+
+.forestMissionPlanner {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+  border: 1px solid #a7cbc3;
+  border-radius: 10px;
+  padding: 12px;
+  background: #f2faf8;
+}
+
+.forestMissionPlanner textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.missionDrawHint {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+  margin: 0;
+  border-radius: 7px;
+  padding: 9px;
+  background: #e5f0ff;
+  color: #1e4f91;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.forestMissionPlannerActions {
+  display: grid;
+  gap: 7px;
+}
+
+.missionPlannerFeedback {
+  margin: 0;
+  color: #315f55;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.realMissionUploadShell {
+  min-height: 100vh;
+  background: #edf2ee;
+}
+
+.realMissionUploadMain {
+  display: grid;
+  gap: 16px;
+  width: min(920px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 24px 0;
+}
+
+.uploadMissionIntro {
+  display: flex;
+  gap: 13px;
+  align-items: flex-start;
+  border: 1px solid #9dc8bb;
+  border-radius: 11px;
+  padding: 15px;
+  background: #edf8f4;
+  color: #234d43;
+}
+
+.uploadMissionIntro p {
+  margin: 5px 0 0;
+  line-height: 1.5;
+}
+
+.realMissionUploadForm {
+  display: grid;
+  gap: 16px;
+  border: 1px solid #d4ddd5;
+  border-radius: 12px;
+  padding: 20px;
+  background: #fff;
+}
+
+.uploadMissionFields {
+  display: grid;
+  gap: 12px;
+}
+
+.uploadMissionFields textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.uploadRouteStatus {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  border-radius: 8px;
+  padding: 10px;
+  background: #f1f5f2;
+}
+
+.uploadRouteStatus span {
+  display: grid;
+  gap: 2px;
+}
+
+.uploadRouteStatus small {
+  color: #66736a;
+}
+
+.realUploadDropzone {
+  display: grid;
+  place-items: center;
+  gap: 7px;
+  border: 2px dashed #9eb5a5;
+  border-radius: 12px;
+  padding: 28px;
+  text-align: center;
+  background: #f8faf8;
+  cursor: pointer;
+}
+
+.realUploadDropzone:hover {
+  border-color: #0f766e;
+  background: #f0f8f5;
+}
+
+.realUploadDropzone small {
+  color: #66736a;
+}
+
+.realUploadDropzone input {
+  width: min(100%, 360px);
+}
+
+.realUploadFileList {
+  display: grid;
+  gap: 7px;
+}
+
+.realUploadFileList > div {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  border: 1px solid #dce3dd;
+  border-radius: 8px;
+  padding: 9px;
+}
+
+.realUploadFileList span {
+  display: grid;
+  gap: 2px;
+}
+
+.realUploadFileList small {
+  color: #66736a;
+}
+
+.forestMissionList {
+  display: grid;
+  gap: 9px;
+}
+
+.forestMissionOpenButton {
+  position: relative;
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  border: 1px solid #d8e0d8;
+  border-radius: 9px;
+  padding: 12px 38px 12px 12px;
+  text-align: left;
+  background: #f8faf7;
+}
+
+.forestMissionOpenIcon {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  color: #0f766e;
+  transform: translateY(-50%);
+}
+
+.forestMissionOpenButton.active,
+.forestMissionOpenButton.selected {
+  border-color: #0f766e;
+  background: #e9f6f3;
+}
+
+.forestMissionEnterButton {
+  width: calc(100% - 38px);
+  margin-top: 6px;
+}
+
+.forestMissionOpenButton span,
+.forestMissionOpenButton small,
+.forestMissionDetail span {
+  color: #66736a;
+  font-size: 11px;
+}
+
+.forestMissionRow {
+  position: relative;
+}
+
+.forestMissionDeleteButton {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #efcaca;
+  border-radius: 7px;
+  color: #b42318;
+  background: #fff5f5;
+}
+
+.forestMissionDeleteButton:hover {
+  border-color: #dc2626;
+  background: #fee2e2;
+}
+
+.forestMissionDetail {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  border: 1px solid #d7dfd8;
+  border-radius: 9px;
+  padding: 13px;
+}
+
+.forestMissionDetail dl,
+.forestMissionDetail dl div {
+  display: grid;
+  gap: 4px;
+}
+
+.forestMissionDetail dl {
+  margin: 4px 0 0;
+}
+
+.forestMissionDetail dl div {
+  grid-template-columns: 95px minmax(0, 1fr);
+  border-top: 1px solid #e2e7e2;
+  padding-top: 5px;
+}
+
+.forestMissionDetail dt {
+  color: #66736a;
+}
+
+.forestMissionDetail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .forestDetailLayout {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(420px, 62vh) auto;
+    height: auto;
+  }
+
+  .forestMissionPanel {
+    border-top: 1px solid #d4ddd5;
+    border-left: 0;
+  }
 }
 
 .hyperionShell {
@@ -1539,6 +2057,21 @@ h1 {
   margin: 2px 0 10px;
 }
 
+.selectAllPathsButton {
+  width: 100%;
+  margin-top: 2px;
+  border-color: rgba(15, 118, 110, 0.4);
+  color: #0f5f58;
+  background: #ecfdf5;
+}
+
+.pathSelectionHint {
+  display: block;
+  margin: 6px 0 2px;
+  color: #526052;
+  line-height: 1.4;
+}
+
 .commandButton {
   display: inline-flex;
   align-items: center;
@@ -1889,7 +2422,7 @@ input[type="range"] {
 }
 
 .pathCaptureControl {
-  top: 16px;
+  top: 205px;
   right: 16px;
   display: grid;
   width: min(310px, calc(100% - 32px));
@@ -1911,6 +2444,45 @@ input[type="range"] {
   font-size: 11px;
   font-weight: 750;
   line-height: 1.35;
+}
+
+.forestAverageMapToggle {
+  top: 62px;
+  right: 16px;
+  display: grid;
+  gap: 6px;
+  max-width: 270px;
+  padding: 9px 12px;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 10px;
+  font-weight: 700;
+}
+
+.forestAverageMapToggle select {
+  width: 100%;
+  min-height: 34px;
+}
+
+.forestAverageMapToggle small {
+  font-weight: 500;
+  color: #475569;
+}
+
+.forestAveragePanel {
+  border-left: 3px solid #0f766e;
+}
+
+.customerReadOnlyNotice {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+  margin: 8px 0;
+  padding: 9px 10px;
+  border-left: 3px solid #0f766e;
+  background: #ecfdf5;
+  color: #134e4a;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .map {
@@ -1953,8 +2525,10 @@ input[type="range"] {
 }
 
 .overviewOpenButton {
-  top: 16px;
-  right: 16px;
+  top: auto;
+  right: auto;
+  bottom: 16px;
+  left: 16px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -2533,13 +3107,86 @@ input[type="range"] {
 
 .municipalityButtonWrap {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 6px;
   align-items: center;
+  border-radius: 9px;
+  transition: opacity 140ms ease, background 140ms ease;
+}
+
+.missionSaveFloatingButton {
+  right: auto;
+  bottom: 58px;
+  left: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 13px;
+  border: 1px solid #0f766e;
+  border-radius: 9px;
+  color: #fff;
+  background: rgba(15, 118, 110, 0.96);
+  font-size: 13px;
+  font-weight: 850;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18);
+}
+
+.missionSaveFloatingButton.saved {
+  background: #15803d;
+}
+
+.missionSaveFloatingButton.queued {
+  border-color: #c2410c;
+  background: #c2410c;
+}
+
+.municipalityButtonWrap.dragging {
+  opacity: 0.45;
+  background: #e8f4f1;
+}
+
+.municipalityDragHandle {
+  color: #87928a;
+  cursor: grab;
+}
+
+.municipalityButtonWrap:active .municipalityDragHandle {
+  cursor: grabbing;
 }
 
 .municipalityButtonWrap .municipalityButton {
   width: 100%;
+}
+
+.municipalitySelectButton,
+.municipalityMapLink {
+  border: 0;
+  padding: 0;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+}
+
+.municipalitySelectButton {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.municipalityMapLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.municipalityMapLink:hover,
+.municipalityMapLink:focus-visible {
+  color: #0f766e;
+  text-decoration: underline;
 }
 
 .municipalityButtonWrap.active .municipalityButton {

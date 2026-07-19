@@ -2,6 +2,8 @@ import cors from "cors";
 import express from "express";
 import { readDatabase, updateDatabase } from "./store.js";
 import { ensureDeploymentArea, ensureMissionRecord, ensureMunicipality, ensurePathRecord, ensurePlannedMission, ensureScenarioRecord, ensureStakeholder } from "./validation.js";
+import { fetchOsmWays, parseOsmBounds, prepareOsmWays } from "./osmProxy.js";
+import { requireAdminForMutation, resolveRole } from "./auth.js";
 
 const app = express();
 const port = Number(process.env.ATHENE_API_PORT ?? 8787);
@@ -11,6 +13,12 @@ const asyncRoute = (handler: express.RequestHandler): express.RequestHandler => 
 
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: "2mb" }));
+
+app.get("/api/auth/session", (request, response) => {
+  response.json({ role: resolveRole(request.header("authorization")) });
+});
+
+app.use("/api", requireAdminForMutation());
 
 app.get("/api/health", asyncRoute(async (_request, response) => {
   const database = await readDatabase();
@@ -160,6 +168,13 @@ app.put("/api/planned-missions/:id", asyncRoute(async (request, response) => {
   response.json(saved);
 }));
 
+app.delete("/api/planned-missions/:id", asyncRoute(async (request, response) => {
+  await updateDatabase((database) => {
+    database.plannedMissions = database.plannedMissions.filter((candidate) => candidate.id !== request.params.id);
+  });
+  response.status(204).end();
+}));
+
 app.get("/api/copernicus/status", (_request, response) => {
   response.json({
     configured: Boolean(process.env.COPERNICUS_CLIENT_ID && process.env.COPERNICUS_CLIENT_SECRET),
@@ -167,6 +182,22 @@ app.get("/api/copernicus/status", (_request, response) => {
     processUrl: process.env.COPERNICUS_PROCESS_URL ?? "https://sh.dataspace.copernicus.eu/api/v1/process",
   });
 });
+
+app.get("/api/osm-forest-paths", asyncRoute(async (request, response) => {
+  const bounds = parseOsmBounds(request.query);
+  const result = await fetchOsmWays(bounds);
+  const areaId = typeof request.query.areaId === "string" ? request.query.areaId : null;
+  if (areaId) {
+    const area = (await readDatabase()).deploymentAreas.find((candidate) => candidate.id === areaId);
+    if (!area) throw new Error("Unknown deployment area");
+    const prepared = prepareOsmWays(result.payload, area.polygon, `${area.id}:${area.updatedAt}:2.5`, 2.5);
+    response.setHeader("X-Athene-Cache", result.cacheStatus === "HIT" && prepared.cacheStatus === "HIT" ? "HIT" : "MISS");
+    response.json({ paths: prepared.paths });
+    return;
+  }
+  response.setHeader("X-Athene-Cache", result.cacheStatus);
+  response.json(result.payload);
+}));
 
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
   const message = error instanceof Error ? error.message : "Unknown API error";

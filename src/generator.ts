@@ -163,6 +163,7 @@ export function generateObservations(mission: Mission, scenario: Scenario): Obse
       confidence: round(clamp01(0.92 - progress * 0.06 - rng() * 0.08), 2),
       source: "Athene Mock Generator",
       generatorVersion: scenario.generatorVersion,
+      routeBreakBefore: waypoint.breakBefore || undefined,
     };
   });
 }
@@ -216,6 +217,7 @@ export function generateRasterCoverageLayer(observations: Observation[], layer: 
   for (let index = 0; index < observations.length - 1; index += 1) {
     const start = observations[index];
     const end = observations[index + 1];
+    if (end.routeBreakBefore) continue;
     const segmentLength = distanceMeters(start, end);
     const segmentSamples = Math.max(1, Math.ceil(segmentLength / sampleStepMeters));
     const bearing = bearingBetween(start, end);
@@ -254,6 +256,7 @@ export function generateRasterCoverageLayer(observations: Observation[], layer: 
   return cells;
 }
 
+/** Nearest-neighbour projection across the forest polygon. Values outside the measured route remain explicitly interpolated. */
 export function getLayerValue(observation: Observation, layerId: LayerId): number {
   if (layerId === "confidence") return observation.confidence;
   if (layerId === "copernicusNdvi" || layerId === "copernicusNdmi" || layerId === "copernicusNbr") return 0;

@@ -27,6 +27,12 @@ test("pending areas and explicit mission paths pass boundary validation", () => 
   assert.throws(() => ensurePlannedMission({ ...seedPlannedMissions[0], missionPath: { name: "Defekt", waypoints: [{ lat: Number.NaN, lng: 9 }] } }), /Invalid planned mission path coordinates/);
 });
 
+test("mission route summaries require bounded values and provenance", () => {
+  const routeSummary = { averageDryStress: 0.52, averageConfidence: 0.81, observationCount: 20, calculatedAt: new Date().toISOString(), dataOrigin: "synthetic" as const, dataStatus: "derived" as const, source: "Mission route", modelVersion: "0.1.0" };
+  assert.equal(ensurePlannedMission({ ...seedPlannedMissions[0], routeSummary }).routeSummary?.observationCount, 20);
+  assert.throws(() => ensurePlannedMission({ ...seedPlannedMissions[0], routeSummary: { ...routeSummary, averageDryStress: 1.4 } }), /Invalid planned mission route summary/);
+});
+
 test("mission linkage and coverage invariants are enforced", () => {
   assert.throws(() => ensureMissionRecord({ ...missionRecord(), municipalityId: null }), /Invalid linked mission IDs/);
   assert.throws(() => ensureMissionRecord({ ...missionRecord(), coverageShare: 0.8, unknownShare: 0.8 }), /Invalid coverage sum/);

@@ -1,5 +1,6 @@
 import { Fragment, type ChangeEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { CircleMarker, GeoJSON, MapContainer, Polygon, Polyline, Rectangle, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { CircleMarker, GeoJSON, ImageOverlay, MapContainer, Polygon, Polyline, Rectangle, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { canvas as createLeafletCanvas } from "leaflet";
 import {
   Activity,
   AlertTriangle,
@@ -12,6 +13,7 @@ import {
   FileText,
   Flame,
   FolderOpen,
+  GripVertical,
   Layers,
   MapPinned,
   Pause,
@@ -39,7 +41,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Coordinate, CoverageCell, DeploymentArea, ForestArea, ForestPath, LayerId, MissionRecord, MunicipalityRecord, Observation, PlannedMissionRecord, SavedPathRecord, SavedScenarioRecord, ScenarioParams, StakeholderRecord, Waypoint } from "./domain";
+import { Coordinate, CoverageCell, DeploymentArea, ForestArea, ForestPath, LayerId, MissionPath, MissionRecord, MunicipalityRecord, Observation, PlannedMissionRecord, SavedPathRecord, SavedScenarioRecord, ScenarioParams, StakeholderRecord, Waypoint } from "./domain";
 import {
   colorForValue,
   defaultScenarioParams,
@@ -54,8 +56,10 @@ import {
   layerDefinitions,
 } from "./generator";
 import { CopernicusAnalysis, generateCopernicusDemoAnalysis, getCopernicusConfig, getCopernicusLayerCells } from "./copernicus";
+import { fetchOsmForestPaths, OsmForestPath } from "./osmForestPaths";
 import {
   deleteMissionRecord,
+  deletePlannedMission,
   deletePathRecord,
   deleteScenarioRecord,
   fetchForestAreas,
@@ -73,9 +77,16 @@ import {
   saveScenarioRecord,
   saveStakeholder,
 } from "./api";
-import { aggregateAreaRecords, calculatePolygonHectares, calculateRouteCoverageShare, hasDefinedMissionPath, ManagementSelection, normalizeDeploymentArea, resolveManagementSelection, seedDeploymentAreas, seedMunicipalities, seedPlannedMissions, seedStakeholders } from "./management";
+import { aggregateAreaRecords, calculatePolygonHectares, calculateRouteCoverageShare, hasDefinedMissionPath, ManagementSelection, missionPathWaypoints, normalizeDeploymentArea, resolveManagementSelection, seedDeploymentAreas, seedMunicipalities, seedPlannedMissions, seedStakeholders } from "./management";
 import { acknowledgeManagementMutation, enqueueManagementMutation, flushManagementOutbox, ManagementMutation, mergePendingEntities, readManagementOutbox } from "./managementOutbox";
 import { buildFallbackWeather, describeWeatherCode, fetchLiveWeather, LiveWeather } from "./weather";
+import { RealMissionUploadPage } from "./pages/RealMissionUploadPage";
+import { PortalPage } from "./pages/PortalPage";
+import { AreaContextPage, RegionalConditionOverview } from "./pages/ForestOverviewPages";
+import { PortalRole, usePortalAuthorization } from "./hooks/usePortalAuthorization";
+import { FitCoordinateBounds, MapClickCapture } from "./components/MapControllers";
+import { useForestHeatmap } from "./hooks/useForestHeatmap";
+import { createMissionPath, missionPathSegments, missionPathWaypointsFlat } from "./routeGeometry";
 import {
   BiodiversityMetrics,
   calculateBiodiversityMetrics,
@@ -94,6 +105,7 @@ const savedPathsStorageKey = "athene.savedPaths.v1";
 const savedScenariosStorageKey = "athene.savedScenarios.v1";
 const forestAreasStorageKey = "athene.forestAreas.v1";
 const municipalitiesStorageKey = "athene.municipalities.v2";
+const municipalityOrderStorageKey = "athene.municipalityOrder.v1";
 const stakeholdersStorageKey = "athene.stakeholders.v2";
 const plannedMissionsStorageKey = "athene.plannedMissions.v2";
 const customIndexesStorageKey = "athene.customIndexes.v1";
@@ -122,7 +134,7 @@ const baseMaps = {
 
 type BaseMapId = keyof typeof baseMaps;
 
-type AppView = "portal" | "geo" | "indexBuilder" | "hyperion" | "adminMap" | "regionalOverview";
+type AppView = "portal" | "geo" | "indexBuilder" | "hyperion" | "adminMap" | "regionalOverview" | "missionUpload";
 
 interface HyperionMapItem {
   id: string;
@@ -196,7 +208,9 @@ interface CustomerMissionTemplate {
   seed: string;
   scenarioName: string;
   pathName: string;
-  missionPath?: { name: string; waypoints: Waypoint[] } | null;
+  missionPath?: MissionPath | null;
+  dataMode?: "real" | "mock";
+  routeSummary?: PlannedMissionRecord["routeSummary"];
   params: ScenarioParams;
 }
 
@@ -407,11 +421,16 @@ export function App() {
   const [indexDisplaySettings, setIndexDisplaySettings] = useState<IndexDisplaySetting[]>(readIndexDisplaySettings);
   const [missionRecords, setMissionRecords] = useState<MissionRecord[]>([]);
   const [managedMunicipalities, setManagedMunicipalities] = useState<MunicipalityRecord[]>(readManagedMunicipalities);
+  const [municipalityOrder, setMunicipalityOrder] = useState<string[]>(readMunicipalityOrder);
   const [deploymentAreas, setDeploymentAreas] = useState<DeploymentArea[]>(readDeploymentAreas);
   const [managedStakeholders, setManagedStakeholders] = useState<StakeholderRecord[]>(readManagedStakeholders);
   const [plannedMissions, setPlannedMissions] = useState<PlannedMissionRecord[]>(readPlannedMissions);
   const [managementSelection, setManagementSelection] = useState<ManagementSelection>({ municipalityId: "mun-esslingen", areaId: "area-ess-south", missionId: "cust-esslingen-20260716-fire" });
   const [mapFocusAreaId, setMapFocusAreaId] = useState<string | null>(null);
+  const [mapFocusMunicipalityId, setMapFocusMunicipalityId] = useState<string | null>(null);
+  const [missionUploadContext, setMissionUploadContext] = useState<{ areaId: string; route: Coordinate[] } | null>(null);
+  const [mapDetailAreaId, setMapDetailAreaId] = useState<string | null>(null);
+  const [geoParentView, setGeoParentView] = useState<"portal" | "adminMap">("portal");
   const [geoContextMode, setGeoContextMode] = useState<"area" | "mission">("mission");
   const [managementDialog, setManagementDialog] = useState<"municipality" | "stakeholder" | "area" | "mission" | null>(null);
   const [editingAreaId, setEditingAreaId] = useState<string | null>(null);
@@ -419,17 +438,41 @@ export function App() {
   const [editingStakeholderId, setEditingStakeholderId] = useState<string | null>(null);
   const [pendingSyncCount, setPendingSyncCount] = useState(() => readManagementOutbox().length);
   const [managementFeedback, setManagementFeedback] = useState<{ tone: "success" | "error" | "loading"; message: string } | null>(null);
+  const { role: portalRole, isAdmin, changeRole: changePortalRole } = usePortalAuthorization(setManagementFeedback);
   const [selectedScenarioId, setSelectedScenarioId] = useState("");
   const [customerMissionStatus, setCustomerMissionStatus] = useState<"eingang" | "geladen" | "processing" | "bereit">("eingang");
   const [liveWeather, setLiveWeather] = useState<LiveWeather>(() => buildFallbackWeather(seedMunicipalities[0].center));
   const [weatherStatus, setWeatherStatus] = useState<"loading" | "live" | "fallback">("fallback");
+  const [geoOsmForestPaths, setGeoOsmForestPaths] = useState<OsmForestPath[]>([]);
+  const [geoOsmPathState, setGeoOsmPathState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [geoOsmPathProgress, setGeoOsmPathProgress] = useState(0);
+  const [geoOsmReloadKey, setGeoOsmReloadKey] = useState(0);
+  const [geoSelectedOsmPathIds, setGeoSelectedOsmPathIds] = useState<number[]>([]);
+  const [geoOsmBaseRoute, setGeoOsmBaseRoute] = useState<Waypoint[]>([]);
+  const [geoHoveredOsmPathId, setGeoHoveredOsmPathId] = useState<number | null>(null);
+  const [forestDataDisplayMode, setForestDataDisplayMode] = useState<"corridor" | "surface" | "average">("corridor");
+  const [missionSaveState, setMissionSaveState] = useState<"idle" | "saving" | "saved" | "queued">("idle");
+  const geoOsmPathRenderer = useMemo(() => createLeafletCanvas({ padding: 0.5, tolerance: 12 }), []);
 
-  const portalMunicipalities = useMemo<Municipality[]>(() => managedMunicipalities.filter((municipality) => municipality.status !== "archived").map((municipality) => ({
-    ...municipality,
-    stakeholders: managedStakeholders.filter((stakeholder) => stakeholder.municipalityId === municipality.id && stakeholder.status !== "archived"),
-    areas: deploymentAreas.filter((area) => area.municipalityId === municipality.id && area.status !== "archiviert"),
-    missionIds: plannedMissions.filter((missionItem) => missionItem.municipalityId === municipality.id).map((missionItem) => missionItem.id),
-  })), [deploymentAreas, managedMunicipalities, managedStakeholders, plannedMissions]);
+  useEffect(() => {
+    if (isAdmin) return;
+    setIsPathCaptureEnabled(false);
+    setGeoSelectedOsmPathIds([]);
+    setGeoOsmBaseRoute([]);
+  }, [isAdmin]);
+
+  const portalMunicipalities = useMemo<Municipality[]>(() => {
+    const orderIndex = new Map(municipalityOrder.map((id, index) => [id, index]));
+    return managedMunicipalities
+      .filter((municipality) => municipality.status !== "archived")
+      .map((municipality) => ({
+        ...municipality,
+        stakeholders: managedStakeholders.filter((stakeholder) => stakeholder.municipalityId === municipality.id && stakeholder.status !== "archived"),
+        areas: deploymentAreas.filter((area) => area.municipalityId === municipality.id && area.status !== "archiviert"),
+        missionIds: plannedMissions.filter((missionItem) => missionItem.municipalityId === municipality.id).map((missionItem) => missionItem.id),
+      }))
+      .sort((a, b) => (orderIndex.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (orderIndex.get(b.id) ?? Number.MAX_SAFE_INTEGER));
+  }, [deploymentAreas, managedMunicipalities, managedStakeholders, municipalityOrder, plannedMissions]);
   const portalMissions = useMemo<CustomerMissionTemplate[]>(() => plannedMissions.map((missionItem) => {
     const areaItem = deploymentAreas.find((area) => area.id === missionItem.areaId);
     const owner = managedStakeholders.find((stakeholder) => stakeholder.municipalityId === missionItem.municipalityId);
@@ -437,13 +480,25 @@ export function App() {
   }), [deploymentAreas, managedStakeholders, plannedMissions]);
   const selectionCollections = useMemo(() => ({ municipalities: managedMunicipalities, areas: deploymentAreas, missions: plannedMissions }), [deploymentAreas, managedMunicipalities, plannedMissions]);
   const selectManagementContext = (requested: Partial<ManagementSelection>) => setManagementSelection(resolveManagementSelection(selectionCollections, requested));
+  const reorderMunicipalities = (draggedId: string, targetId: string) => {
+    if (draggedId === targetId) return;
+    const activeIds = portalMunicipalities.map((municipality) => municipality.id);
+    const fromIndex = activeIds.indexOf(draggedId);
+    const targetIndex = activeIds.indexOf(targetId);
+    if (fromIndex < 0 || targetIndex < 0) return;
+    const next = [...activeIds];
+    const [dragged] = next.splice(fromIndex, 1);
+    next.splice(targetIndex, 0, dragged);
+    setMunicipalityOrder(next);
+    window.localStorage.setItem(municipalityOrderStorageKey, JSON.stringify(next));
+  };
   const selectedMunicipalityId = managementSelection.municipalityId;
   const selectedAreaId = managementSelection.areaId;
   const selectedCustomerMissionId = managementSelection.missionId;
   const selectedMunicipality = portalMunicipalities.find((item) => item.id === selectedMunicipalityId) ?? null;
   const selectedArea = deploymentAreas.find((area) => area.id === selectedAreaId && area.municipalityId === selectedMunicipalityId && area.status !== "archiviert") ?? null;
   const selectedCustomerMission = portalMissions.find((item) => item.id === selectedCustomerMissionId && item.areaId === selectedAreaId && item.municipalityId === selectedMunicipalityId) ?? null;
-  const hasActiveMissionPath = selectedCustomerMission?.missionPath !== null || draftWaypoints.length >= 2;
+  const hasActiveMissionPath = draftWaypoints.length >= 2;
   const allIndexDefinitions = useMemo<IndexDefinitionDemo[]>(() => [...customIndexes, ...indexDefinitionsDemo], [customIndexes]);
   const displayedIndexDefinitions = useMemo(
     () =>
@@ -464,11 +519,9 @@ export function App() {
     () => (draftWaypoints.length >= 2 ? buildForestPath(draftWaypoints, draftPathName) : fitForestPathToArea(scenario.forestPath, canonicalForestArea)),
     [canonicalForestArea, draftPathName, draftWaypoints, scenario.forestPath],
   );
-  const activeForestArea = useMemo(
-    () => (draftWaypoints.length >= 2 ? buildForestAreaForPath(activeForestPath, canonicalForestArea) : canonicalForestArea),
-    [activeForestPath, canonicalForestArea, draftWaypoints.length],
-  );
+  const activeForestArea = canonicalForestArea;
   const activeRouteLengthMeters = useMemo(() => calculateRouteLengthMeters(activeForestPath.waypoints), [activeForestPath.waypoints]);
+  const activeMeasurementCorridorHectares = Math.max(0, round((activeRouteLengthMeters * measurementCorridorWidthMeters) / 10_000, 2));
   const activeScenario = useMemo(() => ({ ...scenario, forestArea: activeForestArea, forestPath: activeForestPath }), [activeForestArea, activeForestPath, scenario]);
   const mission = useMemo(() => generateMission(activeScenario, { areaId: selectedArea?.id, municipalityId: selectedMunicipality?.id }), [activeScenario, selectedArea?.id, selectedMunicipality?.id]);
   const observations = useMemo(() => generateObservations(mission, activeScenario), [mission, activeScenario]);
@@ -479,15 +532,21 @@ export function App() {
   const copernicusConfig = useMemo(() => getCopernicusConfig(), []);
   const copernicusAnalysis = useMemo(() => generateCopernicusDemoAnalysis(activeScenario), [activeScenario]);
   const isCopernicusLayer = copernicusLayerIds.includes(activeLayerId);
-  const coverage = useMemo(
+  const corridorCoverage = useMemo(
     () => (isCopernicusLayer ? getCopernicusLayerCells(copernicusAnalysis, activeLayerId) : generateRasterCoverageLayer(observations, activeLayer, activeScenario.forestArea.polygon)),
     [activeLayer, activeLayerId, activeScenario.forestArea.polygon, copernicusAnalysis, isCopernicusLayer, observations],
   );
+  const coverage = corridorCoverage;
+  const heatmapRequest = useMemo(() => ({ observations, layer: activeLayer, polygon: activeScenario.forestArea.polygon }), [activeLayer, activeScenario.forestArea.polygon, observations]);
+  const debouncedHeatmapRequest = useDebouncedValue(heatmapRequest, 1_000);
+  const { image: interpolatedForestHeatmap, loading: isHeatmapWorkerLoading } = useForestHeatmap(debouncedHeatmapRequest.observations, debouncedHeatmapRequest.layer, debouncedHeatmapRequest.polygon, forestDataDisplayMode === "surface" && !isCopernicusLayer);
+  const isHeatmapUpdatePending = forestDataDisplayMode === "surface" && (debouncedHeatmapRequest !== heatmapRequest || isHeatmapWorkerLoading);
+  const forestAverageValue = useMemo(() => {
+    const values = corridorCoverage.map((cell) => cell.value).filter((value): value is number => value !== null);
+    return values.length > 0 ? average(values) : null;
+  }, [corridorCoverage]);
   const mapCenter = useMemo(() => centroidOf(activeScenario.forestArea.polygon), [activeScenario.forestArea.polygon]);
-  const mapKey = useMemo(
-    () => `${activeScenario.forestArea.id}-${activeForestPath.waypoints.length}-${round(mapCenter.lat, 5)}-${round(mapCenter.lng, 5)}`,
-    [activeForestPath.waypoints.length, activeScenario.forestArea.id, mapCenter.lat, mapCenter.lng],
-  );
+  const mapKey = canonicalForestArea.id;
   const weatherLocation = useMemo(() => (appView === "portal" && selectedMunicipality ? selectedMunicipality.center : mapCenter), [appView, mapCenter, selectedMunicipality]);
   const cellBounds = useMemo(() => buildCellBounds(coverage), [coverage]);
   const currentObservation = observations[currentIndex] ?? observations[0];
@@ -561,6 +620,31 @@ export function App() {
   }, [weatherLocation]);
 
   useEffect(() => {
+    if (appView !== "geo" || !selectedArea || selectedArea.boundaryStatus !== "defined") {
+      setGeoOsmForestPaths([]);
+      setGeoOsmPathState("idle");
+      setGeoOsmPathProgress(0);
+      return;
+    }
+    const controller = new AbortController();
+    setGeoOsmPathState("loading");
+    setGeoOsmPathProgress(5);
+    fetchOsmForestPaths(selectedArea, controller.signal, setGeoOsmPathProgress)
+      .then((paths) => {
+        setGeoOsmForestPaths(paths);
+        setGeoOsmPathState("ready");
+        setGeoOsmPathProgress(100);
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setGeoOsmForestPaths([]);
+        setGeoOsmPathState("error");
+        setGeoOsmPathProgress(0);
+      });
+    return () => controller.abort();
+  }, [appView, geoOsmReloadKey, selectedArea]);
+
+  useEffect(() => {
     if (customerMissionStatus === "processing" && currentIndex >= observations.length - 1) {
       setCustomerMissionStatus("bereit");
     }
@@ -606,10 +690,42 @@ export function App() {
   };
 
   const addDraftCoordinate = (coordinate: Coordinate) => {
+    if (!isAdmin) return;
+    setGeoSelectedOsmPathIds([]);
+    setGeoOsmBaseRoute([]);
     setDraftWaypoints((current) => buildWaypoints([...current, coordinate]));
   };
 
+  const toggleDetectedPathSegment = (path: OsmForestPath) => {
+    if (!isAdmin) return;
+    const isSelected = geoSelectedOsmPathIds.includes(path.id);
+    const nextIds = isSelected
+      ? geoSelectedOsmPathIds.filter((pathId) => pathId !== path.id)
+      : [...geoSelectedOsmPathIds, path.id];
+    const baseRoute = geoSelectedOsmPathIds.length === 0 ? draftWaypoints : geoOsmBaseRoute;
+    if (geoSelectedOsmPathIds.length === 0) setGeoOsmBaseRoute(baseRoute);
+    const selectedSegments = nextIds
+      .map((pathId) => geoOsmForestPaths.find((candidate) => candidate.id === pathId))
+      .filter((candidate): candidate is OsmForestPath => Boolean(candidate));
+    setGeoSelectedOsmPathIds(nextIds);
+    setDraftWaypoints(buildWaypoints(composeRouteSegments(baseRoute, selectedSegments)));
+    setDraftPathName(nextIds.length ? `${selectedArea?.name ?? "Waldgebiet"} Gesamtfahrt` : selectedCustomerMission?.pathName ?? "Manuell erfasster Weg");
+    setIsPathCaptureEnabled(false);
+  };
+
+  const selectAllDetectedPathSegments = () => {
+    if (!isAdmin || geoOsmForestPaths.length === 0) return;
+    const allPathIds = geoOsmForestPaths.map((path) => path.id);
+    setGeoOsmBaseRoute([]);
+    setGeoSelectedOsmPathIds(allPathIds);
+    setDraftWaypoints(buildWaypoints(composeRouteSegments([], geoOsmForestPaths)));
+    setDraftPathName(`${selectedArea?.name ?? "Waldgebiet"} Gesamtfahrt`);
+    setIsPathCaptureEnabled(false);
+    setManagementFeedback({ tone: "success", message: `${allPathIds.length} erkannte Wegabschnitte wurden ausgewählt. Einzelne Wege können auf der Karte wieder abgewählt werden.` });
+  };
+
   const addManualWaypoint = () => {
+    if (!isAdmin) return;
     const lat = Number.parseFloat(manualLat.replace(",", "."));
     const lng = Number.parseFloat(manualLng.replace(",", "."));
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
@@ -622,7 +738,7 @@ export function App() {
   };
 
   const saveDraftPath = () => {
-    if (draftWaypoints.length < 2) return;
+    if (!isAdmin || draftWaypoints.length < 2) return;
     const name = draftPathName.trim() || "Manuell erfasster Weg";
     const record: SavedPathRecord = {
       id: `path-${Date.now()}`,
@@ -631,13 +747,25 @@ export function App() {
       waypoints: buildWaypoints(draftWaypoints),
     };
     persistSavedPaths([record, ...savedPaths.filter((path) => path.name !== name)]);
+    setGeoSelectedOsmPathIds([]);
+    setGeoOsmBaseRoute([]);
     void savePathRecord(record).catch(() => undefined);
     if (selectedCustomerMission) {
       const updated: PlannedMissionRecord = {
         ...plannedMissions.find((item) => item.id === selectedCustomerMission.id)!,
         pathName: name,
-        missionPath: { name, waypoints: record.waypoints },
+        missionPath: createMissionPath(name, record.waypoints),
         status: "bereit",
+        routeSummary: {
+          averageDryStress: missionOverview.averageDryStress,
+          averageConfidence: missionOverview.averageConfidence,
+          observationCount: observations.length,
+          calculatedAt: new Date().toISOString(),
+          dataOrigin: "synthetic",
+          dataStatus: "derived",
+          source: `Mission ${selectedCustomerMission.id} / gespeicherter Missionsweg`,
+          modelVersion: scenario.generatorVersion,
+        },
         updatedAt: new Date().toISOString(),
       };
       setPlannedMissions((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
@@ -649,12 +777,16 @@ export function App() {
   };
 
   const loadSavedPath = (path: SavedPathRecord) => {
+    if (!isAdmin) return;
+    setGeoSelectedOsmPathIds([]);
+    setGeoOsmBaseRoute([]);
     setDraftPathName(path.name);
     setDraftWaypoints(buildWaypoints(path.waypoints));
     setIsPathCaptureEnabled(false);
   };
 
   const deleteSavedPath = (pathId: string) => {
+    if (!isAdmin) return;
     persistSavedPaths(savedPaths.filter((path) => path.id !== pathId));
     void deletePathRecord(pathId).catch(() => undefined);
   };
@@ -705,11 +837,13 @@ export function App() {
   };
 
   const loadCustomerMission = (missionTemplate: CustomerMissionTemplate) => {
+    setGeoSelectedOsmPathIds([]);
+    setGeoOsmBaseRoute([]);
     setScenarioName(missionTemplate.scenarioName);
     setSeed(missionTemplate.seed);
     setParams(missionTemplate.params);
     setDraftPathName(missionTemplate.missionPath?.name ?? missionTemplate.pathName);
-    setDraftWaypoints(missionTemplate.missionPath === null ? [] : missionTemplate.missionPath ? buildWaypoints(missionTemplate.missionPath.waypoints) : []);
+    setDraftWaypoints(buildWaypoints(missionPathWaypoints(missionTemplate)));
     setSelectedScenarioId("");
     setCurrentIndex(0);
     setSelectedCell(null);
@@ -721,7 +855,6 @@ export function App() {
     if (!selectedCustomerMission || !hasDefinedMissionPath(selectedCustomerMission)) return;
     loadCustomerMission(selectedCustomerMission);
     setActiveLayerId("dryStress");
-    setBaseMapId("satellite");
     setCustomerMissionStatus("processing");
     setIsPlaying(true);
   };
@@ -732,7 +865,6 @@ export function App() {
     setAppView("geo");
     loadCustomerMission(missionTemplate);
     setActiveLayerId("dryStress");
-    setBaseMapId("satellite");
     if (startProcessing && hasDefinedMissionPath(missionTemplate)) {
       setCustomerMissionStatus("processing");
       setIsPlaying(true);
@@ -787,6 +919,113 @@ export function App() {
       const pending = enqueueManagementMutation("area", area);
       setPendingSyncCount(pending.length);
       setManagementFeedback({ tone: "error", message: `${area.name} ist lokal gespeichert und für die Synchronisierung vorgemerkt. ${errorMessage(error)}` });
+    }
+  };
+
+  const saveCurrentMission = async () => {
+    if (!isAdmin || !selectedCustomerMission) return;
+    const source = plannedMissions.find((item) => item.id === selectedCustomerMission.id);
+    if (!source) return;
+    const timestamp = new Date().toISOString();
+    const hasRoute = draftWaypoints.length >= 2;
+    const updated: PlannedMissionRecord = {
+      ...source,
+      seed,
+      params,
+      scenarioName: scenarioName.trim() || source.scenarioName,
+      pathName: hasRoute ? draftPathName.trim() || source.pathName : source.pathName,
+      missionPath: hasRoute ? createMissionPath(draftPathName.trim() || source.pathName, buildWaypoints(draftWaypoints)) : source.missionPath,
+      status: hasRoute ? "bereit" : source.status,
+      routeSummary: hasRoute ? {
+        averageDryStress: missionOverview.averageDryStress,
+        averageConfidence: missionOverview.averageConfidence,
+        observationCount: observations.length,
+        calculatedAt: timestamp,
+        dataOrigin: "synthetic",
+        dataStatus: "derived",
+        source: `Mission ${source.id} / gespeicherter Missionsstand`,
+        modelVersion: scenario.generatorVersion,
+      } : source.routeSummary,
+      updatedAt: timestamp,
+    };
+    setMissionSaveState("saving");
+    setPlannedMissions((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+    try {
+      const saved = await savePlannedMission(updated);
+      setPlannedMissions((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      setPendingSyncCount(acknowledgeManagementMutation("mission", saved.id).length);
+      setMissionSaveState("saved");
+      setManagementFeedback({ tone: "success", message: `${saved.title} wurde vollständig gespeichert.` });
+    } catch {
+      setPendingSyncCount(enqueueManagementMutation("mission", updated).length);
+      setMissionSaveState("queued");
+      setManagementFeedback({ tone: "error", message: `${updated.title} wurde lokal gesichert und zur erneuten Synchronisierung vorgemerkt.` });
+    }
+  };
+
+  useEffect(() => {
+    if (missionSaveState === "idle" || missionSaveState === "saving") return;
+    setMissionSaveState("idle");
+  }, [draftPathName, draftWaypoints, params, scenarioName, seed]);
+
+  const planForestMission = async (areaId: string, values: { title: string; objective: string; priority: PlannedMissionRecord["priority"]; route: Coordinate[]; dataMode?: "real" | "mock"; allowEmptyRoute?: boolean; requestedAt?: string }) => {
+    const area = deploymentAreas.find((item) => item.id === areaId);
+    if (!area?.municipalityId) throw new Error("Das Waldgebiet ist keiner Gemeinde zugeordnet.");
+    if (values.route.length < 2 && !values.allowEmptyRoute) throw new Error("Bitte mindestens zwei Routenpunkte einzeichnen.");
+    const timestamp = new Date().toISOString();
+    const waypoints = buildWaypoints(values.route);
+    const record: PlannedMissionRecord = {
+      id: `plan-${Date.now().toString(36)}`,
+      municipalityId: area.municipalityId,
+      areaId: area.id,
+      title: values.title.trim(),
+      objective: values.objective.trim(),
+      priority: values.priority,
+      status: "geplant",
+      seed: `ATHENE-${area.id}-${Date.now()}`,
+      scenarioName: values.title.trim(),
+      pathName: `${area.name} Route`,
+      missionPath: waypoints.length >= 2 ? createMissionPath(`${area.name} Route`, waypoints) : null,
+      dataMode: values.dataMode ?? "mock",
+      params: defaultScenarioParams,
+      requestedAt: values.requestedAt ? new Date(`${values.requestedAt}T12:00:00`).toISOString() : timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    setPlannedMissions((current) => [record, ...current]);
+    setManagementSelection(resolveManagementSelection({ municipalities: managedMunicipalities, areas: deploymentAreas, missions: [record, ...plannedMissions] }, { missionId: record.id }));
+    try {
+      const saved = await savePlannedMission(record);
+      setPlannedMissions((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      setPendingSyncCount(acknowledgeManagementMutation("mission", saved.id).length);
+      setManagementFeedback({ tone: "success", message: `${record.title} wurde geplant.` });
+    } catch (error) {
+      const pending = enqueueManagementMutation("mission", record);
+      setPendingSyncCount(pending.length);
+      setManagementFeedback({ tone: "error", message: `${record.title} wurde lokal geplant und für die Synchronisierung vorgemerkt. ${errorMessage(error)}` });
+    }
+  };
+
+  const updateMissionDate = (date: string) => {
+    if (!isAdmin || !selectedCustomerMission || !date) return;
+    const source = plannedMissions.find((item) => item.id === selectedCustomerMission.id);
+    if (!source) return;
+    const updated = { ...source, requestedAt: new Date(`${date}T12:00:00`).toISOString(), updatedAt: new Date().toISOString() };
+    setPlannedMissions((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+    void savePlannedMission(updated).catch(() => setPendingSyncCount(enqueueManagementMutation("mission", updated).length));
+  };
+
+  const removePlannedMission = async (missionId: string) => {
+    const missionToDelete = plannedMissions.find((missionItem) => missionItem.id === missionId);
+    if (!missionToDelete) return;
+    setPlannedMissions((current) => current.filter((missionItem) => missionItem.id !== missionId));
+    if (selectedCustomerMissionId === missionId) selectManagementContext({ areaId: missionToDelete.areaId, missionId: null });
+    try {
+      await deletePlannedMission(missionId);
+      setManagementFeedback({ tone: "success", message: `${missionToDelete.title} wurde gelöscht.` });
+    } catch (error) {
+      setPlannedMissions((current) => [missionToDelete, ...current.filter((missionItem) => missionItem.id !== missionId)]);
+      setManagementFeedback({ tone: "error", message: `${missionToDelete.title} konnte nicht gelöscht werden. ${errorMessage(error)}` });
     }
   };
 
@@ -1034,6 +1273,8 @@ export function App() {
   if (appView === "portal") {
     return (
       <PortalPage
+        role={portalRole}
+        onRoleChange={(role) => { void changePortalRole(role); }}
         municipalities={portalMunicipalities}
         areas={deploymentAreas}
         missions={portalMissions}
@@ -1043,7 +1284,9 @@ export function App() {
         biodiversityMetrics={biodiversityMetrics}
         indexDefinitions={displayedIndexDefinitions}
         onSelectMunicipality={(municipalityId) => selectManagementContext({ municipalityId })}
-        onOpenMission={openGeoMissionFromPortal}
+        onReorderMunicipalities={reorderMunicipalities}
+        onOpenMunicipalityMap={(municipalityId) => { selectManagementContext({ municipalityId }); setMapFocusAreaId(null); setMapFocusMunicipalityId(municipalityId); setAppView("adminMap"); }}
+        onOpenMission={(mission, startProcessing) => { setGeoParentView("portal"); openGeoMissionFromPortal(mission, startProcessing); }}
         onOpenAreaMap={openAreaOnMap}
         onCreateMunicipality={() => { setEditingMunicipalityId(null); setManagementDialog("municipality"); }}
         onEditMunicipality={(municipalityId) => { setEditingMunicipalityId(municipalityId); setManagementDialog("municipality"); }}
@@ -1065,29 +1308,72 @@ export function App() {
         pendingSyncCount={pendingSyncCount}
         onOpenIndexBuilder={() => setAppView("indexBuilder")}
         onOpenHyperion={() => setAppView("hyperion")}
-        onOpenAdminMap={() => { setMapFocusAreaId(null); setAppView("adminMap"); }}
+        onOpenAdminMap={() => { setMapFocusAreaId(null); setMapFocusMunicipalityId(null); setAppView("adminMap"); }}
         onOpenRegionalOverview={() => setAppView("regionalOverview")}
       />
     );
   }
 
+  if (appView === "missionUpload" && missionUploadContext) {
+    const uploadArea = deploymentAreas.find((area) => area.id === missionUploadContext.areaId);
+    if (uploadArea) {
+      return (
+        <RealMissionUploadPage
+          area={uploadArea}
+          route={missionUploadContext.route}
+          onBack={() => setAppView("adminMap")}
+          onCreateMission={(values) => planForestMission(uploadArea.id, { ...values, route: missionUploadContext.route, dataMode: "real" })}
+        />
+      );
+    }
+  }
+
   if (appView === "adminMap") {
     return (
       <BadenWuerttembergMapPage
+        canManage={isAdmin}
         municipalities={portalMunicipalities}
         missions={portalMissions}
         forestAreas={deploymentAreas}
         selectedAreaId={selectedAreaId ?? ""}
         focusAreaId={mapFocusAreaId}
+        focusMunicipalityId={mapFocusMunicipalityId}
+        initialDetailAreaId={mapDetailAreaId}
+        initialBaseMapId={baseMapId}
         selectedMunicipalityId={selectedMunicipalityId ?? ""}
-        onSelectArea={(areaId) => { selectManagementContext({ areaId, missionId: null }); setMapFocusAreaId(areaId); }}
+        onSelectArea={(areaId, preserveViewport = false) => { selectManagementContext({ areaId, missionId: null }); if (!preserveViewport) setMapFocusAreaId(areaId); }}
         onSelectMunicipalityContext={(municipalityId) => selectManagementContext({ municipalityId, areaId: municipalityId ? undefined : null, missionId: null })}
         onClearAreaFocus={() => setMapFocusAreaId(null)}
         onSaveArea={persistArea}
+        onPlanForestMission={planForestMission}
+        onDetailAreaChange={setMapDetailAreaId}
+        onBaseMapChange={setBaseMapId}
+        onOpenRealMissionUpload={(areaId, route) => { setMapDetailAreaId(areaId); setMissionUploadContext({ areaId, route }); setAppView("missionUpload"); }}
+        onOpenMockMission={(areaId) => {
+          selectManagementContext({ areaId, missionId: null });
+          const area = deploymentAreas.find((item) => item.id === areaId);
+          const title = `${area?.name ?? "Waldgebiet"} Mock-Mission`;
+          void planForestMission(areaId, { title, objective: "Neue Mock-Mission ohne vordefinierten Missionspfad", priority: "normal", route: [], dataMode: "mock", allowEmptyRoute: true }).then(() => {
+            setScenarioName(title);
+            setDraftPathName(`${area?.name ?? "Waldgebiet"} Route`);
+            setDraftWaypoints([]);
+            setIsPathCaptureEnabled(false);
+            setGeoContextMode("mission");
+            setMapDetailAreaId(areaId);
+            setGeoParentView("adminMap");
+            setAppView("geo");
+          });
+        }}
+        onOpenMission={(mission) => {
+          setMapDetailAreaId(mission.areaId);
+          setGeoParentView("adminMap");
+          openGeoMissionFromPortal(mission, false);
+        }}
+        onDeleteMission={removePlannedMission}
         onArchiveArea={archiveArea}
         feedback={managementFeedback}
         onBackToPortal={() => setAppView("portal")}
-        onOpenGeo={() => { if (selectedAreaId) openAreaInGeo(selectedAreaId); }}
+        onOpenGeo={() => { if (selectedAreaId) { setGeoParentView("adminMap"); openAreaInGeo(selectedAreaId); } }}
       />
     );
   }
@@ -1152,6 +1438,7 @@ export function App() {
   if (isMissionOverviewOpen) {
     return (
       <MissionOverviewPage
+        canManage={isAdmin}
         scenarioName={scenarioName}
         missionId={mission.id}
         vehicle={mission.vehicle}
@@ -1187,14 +1474,14 @@ export function App() {
             <h1>Project Athene</h1>
           </div>
         </header>
-        <button className="portalBackButton" onClick={() => setAppView("portal")} type="button">
+        <button className="portalBackButton" onClick={() => geoParentView === "adminMap" ? setAppView("adminMap") : setGeoContextMode("area")} type="button">
           <ArrowLeft size={16} />
-          Verwaltungsportal
+          {geoParentView === "adminMap" ? "Zum Waldgebiet" : "Zum Einsatzgebiet"}
         </button>
-        <button className="portalBackButton" onClick={() => setAppView("indexBuilder")} type="button">
+        {isAdmin && <button className="portalBackButton" onClick={() => setAppView("indexBuilder")} type="button">
           <BarChart3 size={16} />
           Index Builder
-        </button>
+        </button>}
 
         <section className="panel geoContextPanel">
           <PanelTitle icon={<Building2 size={18} />} title="Analysekontext" />
@@ -1223,14 +1510,19 @@ export function App() {
               {portalMissions.filter((item) => item.areaId === selectedArea?.id).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
             </select>
           </label>
+          {isAdmin && selectedCustomerMission && <label className="fieldLabel">
+            Erhebungsdatum
+            <input type="date" value={selectedCustomerMission.requestedAt.slice(0, 10)} onChange={(event) => updateMissionDate(event.target.value)} />
+          </label>}
           <div className="contextModeSwitch">
             <button type="button" onClick={() => setGeoContextMode("area")}>Gebietsansicht</button>
             <button className="active" type="button">Missionsansicht</button>
           </div>
+          {!isAdmin && <p className="customerReadOnlyNotice"><ShieldCheck size={14} /> Nur-Lese-Ansicht: Missionsweg, Datum und Missionsdaten können ausschließlich durch Admins geändert werden.</p>}
           <small>{selectedMunicipality?.name} → {selectedArea?.name} → {selectedCustomerMission?.title ?? "Keine Mission"}</small>
         </section>
 
-        <section className="panel">
+        {isAdmin && <section className="panel">
           <PanelTitle icon={<MapPinned size={18} />} title="Scenario Builder" />
           <label className="fieldLabel">
             Szenarioname
@@ -1294,18 +1586,10 @@ export function App() {
             </button>
           </div>
           <input ref={importScenarioInputRef} className="fileInput" type="file" accept="application/json,.json" onChange={importScenario} />
-        </section>
+        </section>}
 
         <section className="panel">
           <PanelTitle icon={<Layers size={18} />} title="Layer" />
-          <div className="baseMapSwitch" aria-label="Kartenbasis">
-            {(Object.entries(baseMaps) as Array<[BaseMapId, (typeof baseMaps)[BaseMapId]]>).map(([id, baseMap]) => (
-              <button key={id} className={baseMapId === id ? "active" : ""} onClick={() => setBaseMapId(id)} type="button">
-                {id === "satellite" ? <Satellite size={15} /> : <MapPinned size={15} />}
-                <span>{baseMap.label}</span>
-              </button>
-            ))}
-          </div>
           <div className="layerList">
             {layerDefinitions.filter((layer) => !copernicusLayerIds.includes(layer.id)).map((layer) => (
               <button
@@ -1351,7 +1635,7 @@ export function App() {
           <RangeField label="Layer-Transparenz" value={layerOpacity} onChange={setLayerOpacity} />
         </section>
 
-        <section className="panel">
+        {isAdmin && <section className="panel">
           <PanelTitle icon={<MapPinned size={18} />} title="Wege erfassen" />
           <label className="fieldLabel">
             Wegname
@@ -1379,22 +1663,28 @@ export function App() {
             <button className="iconButton" aria-label="Letzten Punkt entfürnen" title="Letzten Punkt entfürnen" onClick={() => setDraftWaypoints((current) => buildWaypoints(current.slice(0, -1)))}>
               <Undo2 size={16} />
             </button>
-            <button className="iconButton danger" aria-label="Manuellen Weg löschen" title="Manuellen Weg löschen" onClick={() => setDraftWaypoints([])}>
+            <button className="iconButton danger" aria-label="Manuellen Weg löschen" title="Manuellen Weg löschen" onClick={() => { setDraftWaypoints([]); setGeoSelectedOsmPathIds([]); setGeoOsmBaseRoute([]); }}>
               <Trash2 size={16} />
             </button>
           </div>
+          <button className="commandButton selectAllPathsButton" onClick={selectAllDetectedPathSegments} disabled={geoOsmPathState !== "ready" || geoOsmForestPaths.length === 0 || geoSelectedOsmPathIds.length === geoOsmForestPaths.length} type="button">
+            <MapPinned size={16} />
+            {geoSelectedOsmPathIds.length === geoOsmForestPaths.length && geoOsmForestPaths.length > 0 ? `Alle ${geoOsmForestPaths.length} Wege ausgewählt` : `Alle erkannten Wege auswählen (${geoOsmForestPaths.length})`}
+          </button>
+          {geoSelectedOsmPathIds.length > 0 && <small className="pathSelectionHint">Ausgewählte Wege sind blau. Zum Abwählen den jeweiligen Weg auf der Karte anklicken.</small>}
           <button className="textButton" onClick={() => setDraftWaypoints(buildWaypoints(scenario.forestPath.waypoints))} disabled={selectedCustomerMission?.missionPath === null} title={selectedCustomerMission?.missionPath === null ? "Für neue Missionen muss ein eigener oder importierter Weg verwendet werden." : undefined}>
             Standardroute zum Bearbeiten laden
           </button>
-          <button className="savePathButton" onClick={saveDraftPath} disabled={draftWaypoints.length < 2}>
+          <button className="savePathButton" onClick={saveDraftPath} disabled={draftWaypoints.length < 2 || !selectedCustomerMission}>
             <Save size={16} />
             Weg speichern
           </button>
           <div className="pathSummary">
             <strong>{draftWaypoints.length}</strong>
-            <small>{measuredCoverageCount.toLocaleString("de-DE")} Messfelder · Bewertung: {routeAssessment}</small>
-            <small>{formatRouteLength(activeRouteLengthMeters)} Strecke · {activeScenario.forestArea.hectares.toFixed(2)} ha Messkorridor</small>
-            <span>{!hasActiveMissionPath ? "Noch kein Missionspfad definiert" : draftWaypoints.length >= 2 ? "manuelle Route aktiv" : "Legacy-Standardroute aktiv"}</span>
+            <small>{hasActiveMissionPath ? `${measuredCoverageCount.toLocaleString("de-DE")} Messfelder · Bewertung: ${routeAssessment}` : "Noch keine Streckenmetriken"}</small>
+            <small>{hasActiveMissionPath ? `${formatRouteLength(activeRouteLengthMeters)} Strecke · ${activeMeasurementCorridorHectares.toFixed(2)} ha Messkorridor` : "Route auf der Karte markieren und speichern"}</small>
+            <span>{!hasActiveMissionPath ? "Noch kein Missionspfad definiert" : "Missionspfad aktiv"}</span>
+            <span>{geoSelectedOsmPathIds.length > 0 ? `${geoSelectedOsmPathIds.length} erkannte Wegabschnitte zur Gesamtfahrt kombiniert` : "Keine erkannten Wegabschnitte ausgewählt"}</span>
           </div>
           <div className="waypointList">
             {draftWaypoints.slice(-5).map((waypoint) => (
@@ -1406,7 +1696,7 @@ export function App() {
               </div>
             ))}
           </div>
-          <div className="savedPathList">
+          {!selectedCustomerMission && <div className="savedPathList">
             {savedPaths.length === 0 ? (
               <span className="emptySavedPath">Noch keine gespeicherten Wege</span>
             ) : (
@@ -1423,8 +1713,8 @@ export function App() {
                 </div>
               ))
             )}
-          </div>
-        </section>
+          </div>}
+        </section>}
 
         <section className="panel compact">
           <PanelTitle icon={<ShieldCheck size={18} />} title="Governance" />
@@ -1439,8 +1729,8 @@ export function App() {
 
       <main className="workspace">
         <div className="mapStage">
-          <MapContainer key={mapKey} center={toLatLng(mapCenter)} zoom={15} minZoom={14} maxZoom={18} className="map">
-            <MapClickCapture enabled={isPathCaptureEnabled} onPick={addDraftCoordinate} />
+          <MapContainer key={mapKey} center={toLatLng(mapCenter)} zoom={15} minZoom={14} maxZoom={18} preferCanvas className="map">
+            <MapClickCapture enabled={isAdmin && isPathCaptureEnabled} onPick={addDraftCoordinate} />
             <TileLayer
               key={baseMapId}
               attribution={activeBaseMap.attribution}
@@ -1450,17 +1740,46 @@ export function App() {
               positions={activeScenario.forestArea.polygon.map(toLatLng)}
               pathOptions={{
                 color: baseMapId === "satellite" ? "#f8fafc" : "#334155",
-                fillColor: baseMapId === "satellite" ? "#0f172a" : "#1f2937",
-                fillOpacity: baseMapId === "satellite" ? 0.1 : 0.18,
+                fillColor: forestDataDisplayMode === "average" && forestAverageValue !== null
+                  ? colorForValue(forestAverageValue, activeLayer)
+                  : baseMapId === "satellite" ? "#0f172a" : "#1f2937",
+                fillOpacity: forestDataDisplayMode === "average" && forestAverageValue !== null ? 0.42 : baseMapId === "satellite" ? 0.1 : 0.18,
                 weight: 2,
               }}
-            />
+            >
+              <Tooltip>{forestDataDisplayMode === "average" && forestAverageValue !== null
+                ? `Abgeleiteter Routendurchschnitt: ${formatValue(forestAverageValue, activeLayer)} ${activeLayer.unit}`
+                : activeScenario.forestArea.name}</Tooltip>
+            </Polygon>
+            {geoOsmForestPaths.map((path) => (
+              <Polyline
+                key={`geo-osm-path-${path.id}`}
+                positions={path.coordinates.map(toLatLng)}
+                bubblingMouseEvents={false}
+                eventHandlers={{
+                  mouseover: () => setGeoHoveredOsmPathId(path.id),
+                  mouseout: () => setGeoHoveredOsmPathId(null),
+                  click: () => {
+                    if (!isAdmin || !selectedCustomerMission) return;
+                    toggleDetectedPathSegment(path);
+                  },
+                }}
+                pathOptions={{
+                  color: geoSelectedOsmPathIds.includes(path.id) ? "#2563eb" : geoHoveredOsmPathId === path.id ? "#f59e0b" : "#0f766e",
+                  weight: geoSelectedOsmPathIds.includes(path.id) ? 7 : geoHoveredOsmPathId === path.id ? 7 : 3.5,
+                  opacity: 0.96,
+                  renderer: geoOsmPathRenderer,
+                }}
+              >
+                <Tooltip sticky>{path.name} · {isAdmin ? geoSelectedOsmPathIds.includes(path.id) ? "aus Gesamtfahrt entfernen" : "anklicken und zur Gesamtfahrt hinzufügen" : "erkannter Waldweg"}</Tooltip>
+              </Polyline>
+            ))}
             {hasActiveMissionPath && <Polyline
-              positions={activeForestPath.waypoints.map(toLatLng)}
+              positions={splitRouteAtBreaks(activeForestPath.waypoints).map((segment) => segment.map(toLatLng))}
               pathOptions={{ color: baseMapId === "satellite" ? "#ffffff" : "#64748b", weight: 16, opacity: baseMapId === "satellite" ? 0.16 : 0.2 }}
             />}
             {hasActiveMissionPath && <Polyline
-              positions={activeForestPath.waypoints.map(toLatLng)}
+              positions={splitRouteAtBreaks(activeForestPath.waypoints).map((segment) => segment.map(toLatLng))}
               pathOptions={{ color: draftWaypoints.length >= 2 ? "#f59e0b" : "#14b8a6", weight: 5, opacity: 0.95 }}
             />}
             {draftWaypoints.map((waypoint) => (
@@ -1475,7 +1794,13 @@ export function App() {
                 </Tooltip>
               </CircleMarker>
             ))}
-            {hasActiveMissionPath && coverage.map((cell) => (
+            {hasActiveMissionPath && interpolatedForestHeatmap && <ImageOverlay
+              url={interpolatedForestHeatmap.url}
+              bounds={interpolatedForestHeatmap.bounds}
+              opacity={layerOpacity}
+              interactive={false}
+            />}
+            {hasActiveMissionPath && forestDataDisplayMode === "corridor" && coverage.map((cell) => (
               <Rectangle
                 key={cell.id}
                 bounds={cellBounds.get(cell.id) ?? [[cell.lat, cell.lng], [cell.lat, cell.lng]]}
@@ -1491,6 +1816,7 @@ export function App() {
               >
                 <Tooltip>
                   {activeLayer.name}: {cell.value === null ? "unbekannt" : `${formatValue(cell.value, activeLayer)} ${activeLayer.unit}`}
+                  {cell.dataStatus === "interpolated" ? <><br />Interpoliert · nächster Messpunkt {Math.round(cell.distanceToRouteMeters)} m</> : null}
                 </Tooltip>
               </Rectangle>
             ))}
@@ -1505,20 +1831,42 @@ export function App() {
             </CircleMarker>}
           </MapContainer>
 
+          <div className="mapOverlay forestDetailBaseMaps missionBaseMapControl" aria-label="Basiskarte">
+            {(["street", "topo", "satellite"] as BaseMapId[]).map((mapId) => (
+              <button key={mapId} className={baseMapId === mapId ? "active" : ""} onClick={() => setBaseMapId(mapId)} type="button">
+                {mapId === "street" ? "Karte" : mapId === "topo" ? "Topo" : "Satellit"}
+              </button>
+            ))}
+          </div>
+          <label className="mapOverlay forestAverageMapToggle">
+            Datendarstellung
+            <select value={forestDataDisplayMode} onChange={(event) => setForestDataDisplayMode(event.target.value as "corridor" | "surface" | "average")} disabled={!hasActiveMissionPath}>
+              <option value="corridor">Nur gemessener Korridor</option>
+              <option value="surface">Gesamter Wald · stetige Heatmap</option>
+              <option value="average">Gesamter Wald · Routendurchschnitt</option>
+            </select>
+            <small>{forestDataDisplayMode === "surface" ? isHeatmapUpdatePending ? "Werte geändert · Heatmap wird nach 1 Sekunde Ruhe aktualisiert …" : "IDW-Interpolation aus den sechs nächsten Messpunkten; modelliert außerhalb der Route." : forestDataDisplayMode === "average" ? "Ein abgeleiteter Mittelwert für das ganze Polygon." : "Mess- und schmale Interpolationsfläche entlang der Route."}</small>
+          </label>
+
           <div className="mapOverlay topLeft">
             <strong>{activeScenario.forestArea.name}</strong>
             <span>
               {activeScenario.forestArea.hectares} ha · {mission.vehicle} · {mission.durationMinutes} min
             </span>
             <span>
-              {activeForestPath.name} · {activeForestPath.waypoints.length} Wegpunkte · {formatRouteLength(activeRouteLengthMeters)}
+              {hasActiveMissionPath ? `${activeForestPath.name} · ${activeForestPath.waypoints.length} Wegpunkte · ${formatRouteLength(activeRouteLengthMeters)}` : "Noch kein Missionspfad definiert"}
             </span>
+            <span>
+              {geoOsmPathState === "loading" ? `Erkannte Waldwege werden geladen … ${geoOsmPathProgress}%` : geoOsmPathState === "error" ? "OSM-Wegenetz derzeit nicht verfügbar" : `${geoOsmForestPaths.length} erkannte OSM-Waldwege · geladen`}
+            </span>
+            {geoOsmPathState === "loading" && <progress className="geoPathLoadProgress" max={100} value={geoOsmPathProgress}>{geoOsmPathProgress}%</progress>}
+            {geoOsmPathState === "error" && <button className="textButton" type="button" onClick={() => setGeoOsmReloadKey((value) => value + 1)}>Wegenetz erneut laden</button>}
             <span>
               {measuredCoverageCount.toLocaleString("de-DE")} Messfelder · Bewertung: {routeAssessment}
             </span>
           </div>
 
-          <div className={`mapOverlay pathCaptureControl ${isPathCaptureEnabled ? "active" : ""}`}>
+          {isAdmin && <div className={`mapOverlay pathCaptureControl ${isPathCaptureEnabled ? "active" : ""}`}>
             <button className="commandButton primary" onClick={() => setIsPathCaptureEnabled((enabled) => !enabled)} type="button">
               <MapPinned size={16} />
               {isPathCaptureEnabled ? "Markierung beenden" : "Weg markieren"}
@@ -1531,11 +1879,16 @@ export function App() {
                   : `${draftWaypoints.length} Punkte · Start und Ende markiert`}
             </span>
             {draftWaypoints.length > 0 && (
-              <button className="textButton" onClick={() => { setDraftWaypoints([]); setIsPathCaptureEnabled(true); }} type="button">
+              <button className="textButton" onClick={() => { setDraftWaypoints([]); setGeoSelectedOsmPathIds([]); setGeoOsmBaseRoute([]); setIsPathCaptureEnabled(true); }} type="button">
                 Weg neu markieren
               </button>
             )}
-          </div>
+          </div>}
+
+          {isAdmin && selectedCustomerMission && <button className={`mapOverlay missionSaveFloatingButton ${missionSaveState}`} onClick={() => void saveCurrentMission()} disabled={missionSaveState === "saving"} type="button">
+            <Save size={16} />
+            {missionSaveState === "saving" ? "Mission wird gespeichert …" : missionSaveState === "saved" ? "Mission gespeichert" : missionSaveState === "queued" ? "Lokal gesichert · Sync vorgemerkt" : "Mission speichern"}
+          </button>}
 
           <button className="mapOverlay overviewOpenButton" onClick={() => setIsMissionOverviewOpen(true)} type="button">
             <ClipboardList size={16} />
@@ -2082,6 +2435,25 @@ function AdminMapViewport({ bounds }: { bounds: [[number, number], [number, numb
   return null;
 }
 
+function ForestAreaViewport({ bounds }: { bounds: [[number, number], [number, number]] }) {
+  const map = useMap();
+
+  useEffect(() => {
+    const [[south, west], [north, east]] = bounds;
+    const latPadding = Math.max((north - south) * 0.35, 0.0012);
+    const lngPadding = Math.max((east - west) * 0.35, 0.0012);
+    const paddedBounds: [[number, number], [number, number]] = [
+      [south - latPadding, west - lngPadding],
+      [north + latPadding, east + lngPadding],
+    ];
+    map.setMaxBounds(paddedBounds);
+    map.fitBounds(bounds, { padding: [56, 56], animate: false });
+    map.setMinZoom(Math.max(12, map.getZoom() - 1));
+  }, [bounds, map]);
+
+  return null;
+}
+
 function ForestDrawingCapture({ enabled, onPick }: { enabled: boolean; onPick: (coordinate: Coordinate) => void }) {
   useMapEvents({
     click(event) {
@@ -2093,32 +2465,63 @@ function ForestDrawingCapture({ enabled, onPick }: { enabled: boolean; onPick: (
   return null;
 }
 
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setDebouncedValue(value), delayMs);
+    return () => window.clearTimeout(timeoutId);
+  }, [delayMs, value]);
+  return debouncedValue;
+}
+
 function BadenWuerttembergMapPage({
+  canManage,
   municipalities,
   missions,
   forestAreas,
   selectedAreaId,
   focusAreaId,
+  focusMunicipalityId,
+  initialDetailAreaId,
+  initialBaseMapId,
   selectedMunicipalityId,
   onSelectArea,
   onSelectMunicipalityContext,
   onClearAreaFocus,
   onSaveArea,
+  onPlanForestMission,
+  onDetailAreaChange,
+  onBaseMapChange,
+  onOpenRealMissionUpload,
+  onOpenMockMission,
+  onOpenMission,
+  onDeleteMission,
   onArchiveArea,
   feedback,
   onBackToPortal,
   onOpenGeo,
 }: {
+  canManage: boolean;
   municipalities: Municipality[];
   missions: CustomerMissionTemplate[];
   forestAreas: DeploymentArea[];
   selectedAreaId: string;
   focusAreaId: string | null;
+  focusMunicipalityId: string | null;
+  initialDetailAreaId: string | null;
+  initialBaseMapId: BaseMapId;
   selectedMunicipalityId: string;
-  onSelectArea: (areaId: string) => void;
+  onSelectArea: (areaId: string, preserveViewport?: boolean) => void;
   onSelectMunicipalityContext: (municipalityId: string | null) => void;
   onClearAreaFocus: () => void;
   onSaveArea: (area: DeploymentArea) => Promise<void>;
+  onPlanForestMission: (areaId: string, values: { title: string; objective: string; priority: PlannedMissionRecord["priority"]; route: Coordinate[]; dataMode?: "real" | "mock"; allowEmptyRoute?: boolean; requestedAt?: string }) => Promise<void>;
+  onDetailAreaChange: (areaId: string | null) => void;
+  onBaseMapChange: (baseMapId: BaseMapId) => void;
+  onOpenRealMissionUpload: (areaId: string, route: Coordinate[]) => void;
+  onOpenMockMission: (areaId: string, route: Coordinate[]) => void;
+  onOpenMission: (mission: CustomerMissionTemplate) => void;
+  onDeleteMission: (missionId: string) => Promise<void>;
   onArchiveArea: (areaId: string) => Promise<void>;
   feedback: { tone: "success" | "error" | "loading"; message: string } | null;
   onBackToPortal: () => void;
@@ -2126,7 +2529,7 @@ function BadenWuerttembergMapPage({
 }) {
   const [districts, setDistricts] = useState<DistrictFeatureCollection | null>(null);
   const [selectedDistrictId, setSelectedDistrictId] = useState<number | null>(null);
-  const [isDistrictFocusMode, setIsDistrictFocusMode] = useState(Boolean(focusAreaId));
+  const [isDistrictFocusMode, setIsDistrictFocusMode] = useState(Boolean(focusAreaId || focusMunicipalityId));
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [gemeinden, setGemeinden] = useState<GemeindeFeatureCollection | null>(null);
   const [selectedGemeindeId, setSelectedGemeindeId] = useState<string | null>(null);
@@ -2135,14 +2538,46 @@ function BadenWuerttembergMapPage({
   const [draftForestName, setDraftForestName] = useState("Waldgebiet");
   const [draftForestPolygon, setDraftForestPolygon] = useState<Coordinate[]>([]);
   const [editingMapAreaId, setEditingMapAreaId] = useState<string | null>(null);
-  const [adminBaseMapId, setAdminBaseMapId] = useState<BaseMapId>("street");
+  const [adminBaseMapId, setAdminBaseMapId] = useState<BaseMapId>(initialBaseMapId);
   const [showDistrictBoundaries, setShowDistrictBoundaries] = useState(true);
   const [showMunicipalityBoundaries, setShowMunicipalityBoundaries] = useState(true);
   const [showForestBoundaries, setShowForestBoundaries] = useState(true);
+  const [showForestAverages, setShowForestAverages] = useState(false);
+  const [forestAveragePeriodMode, setForestAveragePeriodMode] = useState<"month" | "quarter">("month");
+  const [selectedForestAveragePeriod, setSelectedForestAveragePeriod] = useState("");
   const selectedManagedArea = forestAreas.find((area) => area.id === selectedAreaId) ?? null;
   const focusedManagedArea = forestAreas.find((area) => area.id === focusAreaId) ?? null;
   const [drawingMunicipalityId, setDrawingMunicipalityId] = useState(forestAreas.find((area) => area.id === focusAreaId)?.municipalityId ?? "");
   const [mapManagementError, setMapManagementError] = useState<string | null>(null);
+  const [detailAreaId, setDetailAreaId] = useState<string | null>(initialDetailAreaId);
+  const [detailMissionId, setDetailMissionId] = useState<string | null>(null);
+  const [detailHeatmapLayerId, setDetailHeatmapLayerId] = useState<LayerId>("dryStress");
+  const [timelineFrom, setTimelineFrom] = useState("");
+  const [timelineTo, setTimelineTo] = useState("");
+  const [timelineIndex, setTimelineIndex] = useState(0);
+  const [isTimelinePlaying, setIsTimelinePlaying] = useState(false);
+  const [isMissionPlannerOpen, setIsMissionPlannerOpen] = useState(false);
+  const [isMissionTypeChoiceOpen, setIsMissionTypeChoiceOpen] = useState(false);
+  const [missionTitle, setMissionTitle] = useState("Waldmission");
+  const [missionObjective, setMissionObjective] = useState("Zustandserfassung und Kontrollgang");
+  const [missionPriority, setMissionPriority] = useState<PlannedMissionRecord["priority"]>("normal");
+  const [missionDate, setMissionDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [missionRoute, setMissionRoute] = useState<Coordinate[]>([]);
+  const [missionPlannerFeedback, setMissionPlannerFeedback] = useState<string | null>(null);
+  const [osmForestPaths, setOsmForestPaths] = useState<OsmForestPath[]>([]);
+  const [osmPathState, setOsmPathState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [osmPathProgress, setOsmPathProgress] = useState(0);
+  const [osmReloadKey, setOsmReloadKey] = useState(0);
+  const [hoveredOsmPathId, setHoveredOsmPathId] = useState<number | null>(null);
+  const detailOsmPathRenderer = useMemo(() => createLeafletCanvas({ padding: 0.5, tolerance: 12 }), []);
+
+  useEffect(() => {
+    if (canManage) return;
+    setIsForestDrawingEnabled(false);
+    setIsMissionPlannerOpen(false);
+    setIsMissionTypeChoiceOpen(false);
+    setMissionRoute([]);
+  }, [canManage]);
   const selectedDistrict = districts?.features.find((feature) => feature.properties.ID_3 === selectedDistrictId) ?? null;
   const selectedGemeinde = gemeinden?.features.find((feature) => feature.properties.gemeinde_id === selectedGemeindeId) ?? null;
   const currentForestScope = selectedGemeinde
@@ -2150,7 +2585,11 @@ function BadenWuerttembergMapPage({
     : selectedDistrict && isDistrictFocusMode
       ? { id: `kreis-${selectedDistrict.properties.ID_3}`, name: selectedDistrict.properties.NAME_3 }
       : { id: "baden-wuerttemberg", name: "Baden-Württemberg" };
-  const visibleForestAreas = forestAreas.filter((area) => area.status !== "archiviert" && (area.scopeId === currentForestScope.id || area.id === focusAreaId));
+  const visibleForestAreas = forestAreas.filter((area) => area.status !== "archiviert" && (
+    area.scopeId === currentForestScope.id
+    || area.id === focusAreaId
+    || Boolean(selectedDistrict && isDistrictFocusMode && geometryContainsCoordinate(selectedDistrict.geometry, centroidOf(area.polygon)))
+  ));
   const visibleDistricts = useMemo<DistrictFeatureCollection | null>(() => {
     if (!districts) return null;
     if (!isDistrictFocusMode || !selectedDistrict) return districts;
@@ -2185,6 +2624,102 @@ function BadenWuerttembergMapPage({
     ? findMunicipalityForDistrict(municipalities, selectedDistrict, forestAreas)
     : null;
   const linkedMissions = linkedMunicipality ? missions.filter((mission) => linkedMunicipality.missionIds.includes(mission.id)) : [];
+  const detailArea = forestAreas.find((area) => area.id === detailAreaId && area.status !== "archiviert") ?? null;
+  const detailAreaBounds = useMemo(
+    () => detailArea ? calculateCoordinateBounds(detailArea.polygon) : null,
+    [detailArea],
+  );
+  const detailAreaMissions = useMemo(() => detailArea ? missions.filter((mission) => mission.areaId === detailArea.id) : [], [detailArea, missions]);
+  const detailMission = detailAreaMissions.find((mission) => mission.id === detailMissionId) ?? null;
+  const detailMissionObservations = useMemo(() => {
+    if (!detailArea || !detailMission?.missionPath || missionPathWaypointsFlat(detailMission.missionPath).length < 2) return [];
+    const generated = generateScenario(detailMission.seed, detailMission.params);
+    const forestArea: ForestArea = { id: detailArea.id, name: detailArea.name, polygon: detailArea.polygon, hectares: detailArea.hectares, authority: detailArea.scopeName };
+    const forestPath = buildForestPath(missionPathWaypointsFlat(detailMission.missionPath), detailMission.missionPath.name);
+    const missionScenario = { ...generated, forestArea, forestPath };
+    return generateObservations(generateMission(missionScenario, { areaId: detailArea.id, municipalityId: detailMission.municipalityId }), missionScenario);
+  }, [detailArea, detailMission]);
+  const detailHeatmapLayer = getLayerDefinition(detailHeatmapLayerId);
+  const { image: detailMissionHeatmap } = useForestHeatmap(detailMissionObservations, detailHeatmapLayer, detailArea?.polygon ?? [], Boolean(detailArea));
+  const chronologicalDetailMissions = useMemo(() => detailAreaMissions
+    .filter((mission) => missionPathWaypointsFlat(mission.missionPath).length >= 2)
+    .filter((mission) => !timelineFrom || mission.requestedAt.slice(0, 10) >= timelineFrom)
+    .filter((mission) => !timelineTo || mission.requestedAt.slice(0, 10) <= timelineTo)
+    .sort((a, b) => new Date(a.requestedAt).getTime() - new Date(b.requestedAt).getTime()), [detailAreaMissions, timelineFrom, timelineTo]);
+
+  useEffect(() => {
+    setTimelineIndex((current) => Math.min(current, Math.max(0, chronologicalDetailMissions.length - 1)));
+  }, [chronologicalDetailMissions.length]);
+
+  useEffect(() => {
+    if (!isTimelinePlaying || chronologicalDetailMissions.length === 0) return;
+    const intervalId = window.setInterval(() => {
+      setTimelineIndex((current) => {
+        if (current >= chronologicalDetailMissions.length - 1) {
+          setIsTimelinePlaying(false);
+          return current;
+        }
+        return current + 1;
+      });
+    }, 1_800);
+    return () => window.clearInterval(intervalId);
+  }, [chronologicalDetailMissions.length, isTimelinePlaying]);
+
+  useEffect(() => {
+    if (!isTimelinePlaying) return;
+    const mission = chronologicalDetailMissions[timelineIndex];
+    if (mission) setDetailMissionId(mission.id);
+  }, [chronologicalDetailMissions, isTimelinePlaying, timelineIndex]);
+  const periodScopeAreaIds = new Set(forestAreas
+    .filter((area) => area.status !== "archiviert")
+    .filter((area) => selectedGemeinde
+      ? area.scopeId === `gemeinde-${selectedGemeinde.properties.gemeinde_id}` || geometryContainsCoordinate(selectedGemeinde.geometry, centroidOf(area.polygon))
+      : selectedDistrict
+        ? geometryContainsCoordinate(selectedDistrict.geometry, centroidOf(area.polygon))
+        : true)
+    .map((area) => area.id));
+  const availableForestAveragePeriods = Array.from(new Set(
+    missions
+      .filter((mission) => periodScopeAreaIds.has(mission.areaId) && (Boolean(mission.routeSummary) || missionPathWaypointsFlat(mission.missionPath).length >= 2))
+      .map((mission) => missionPeriodKey(mission.requestedAt, forestAveragePeriodMode)),
+  )).sort().reverse();
+  const activeForestAveragePeriod = selectedForestAveragePeriod && availableForestAveragePeriods.includes(selectedForestAveragePeriod)
+    ? selectedForestAveragePeriod
+    : availableForestAveragePeriods[0] ?? "";
+  const latestSummaryByArea = new Map<string, CustomerMissionTemplate>();
+  missions
+    .filter((mission) => mission.routeSummary && missionPeriodKey(mission.requestedAt, forestAveragePeriodMode) === activeForestAveragePeriod)
+    .sort((a, b) => new Date(b.routeSummary!.calculatedAt).getTime() - new Date(a.routeSummary!.calculatedAt).getTime())
+    .forEach((mission) => { if (!latestSummaryByArea.has(mission.areaId)) latestSummaryByArea.set(mission.areaId, mission); });
+
+  useEffect(() => {
+    onBaseMapChange(adminBaseMapId);
+  }, [adminBaseMapId, onBaseMapChange]);
+
+  useEffect(() => {
+    if (!detailArea || !detailAreaBounds) {
+      setOsmForestPaths([]);
+      setOsmPathState("idle");
+      setOsmPathProgress(0);
+      return;
+    }
+    const controller = new AbortController();
+    setOsmPathState("loading");
+    setOsmPathProgress(5);
+    fetchOsmForestPaths(detailArea, controller.signal, setOsmPathProgress)
+      .then((paths) => {
+        setOsmForestPaths(paths);
+        setOsmPathState("ready");
+        setOsmPathProgress(100);
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setOsmForestPaths([]);
+        setOsmPathState("error");
+        setOsmPathProgress(0);
+      });
+    return () => controller.abort();
+  }, [detailArea, detailAreaBounds, osmReloadKey]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -2242,6 +2777,28 @@ function BadenWuerttembergMapPage({
       });
     return () => controller.abort();
   }, [focusAreaId, forestAreas, isDistrictFocusMode, selectedDistrict]);
+
+  useEffect(() => {
+    if (!focusMunicipalityId || !districts) return;
+    const municipality = municipalities.find((item) => item.id === focusMunicipalityId);
+    if (!municipality) return;
+    const district = districts.features.find((feature) => geometryContainsCoordinate(feature.geometry, municipality.center));
+    setSelectedDistrictId(district?.properties.ID_3 ?? null);
+    setIsDistrictFocusMode(Boolean(district));
+    setDrawingMunicipalityId(municipality.id);
+  }, [districts, focusMunicipalityId, municipalities]);
+
+  useEffect(() => {
+    if (!focusMunicipalityId || !gemeinden) return;
+    const municipality = municipalities.find((item) => item.id === focusMunicipalityId);
+    if (!municipality) return;
+    const administrativeId = municipality.administrativeScopeId?.startsWith("gemeinde-")
+      ? municipality.administrativeScopeId.slice("gemeinde-".length)
+      : null;
+    const matching = gemeinden.features.find((feature) => feature.properties.gemeinde_id === administrativeId)
+      ?? gemeinden.features.find((feature) => geometryContainsCoordinate(feature.geometry, municipality.center));
+    setSelectedGemeindeId(matching?.properties.gemeinde_id ?? null);
+  }, [focusMunicipalityId, gemeinden, municipalities]);
 
   useEffect(() => {
     setDraftForestPolygon([]);
@@ -2409,6 +2966,245 @@ function BadenWuerttembergMapPage({
     setIsForestDrawingEnabled(true);
   };
 
+  const selectOrOpenArea = (area: DeploymentArea) => {
+    if (area.id === selectedAreaId) {
+      setDetailAreaId(area.id);
+      onDetailAreaChange(area.id);
+      setDetailMissionId(null);
+      return;
+    }
+    onSelectArea(area.id, true);
+  };
+
+  if (detailArea && detailAreaBounds) {
+    return (
+      <div className="forestDetailShell">
+        <header className="forestDetailHeader">
+          <button className="commandButton" onClick={() => { setDetailAreaId(null); onDetailAreaChange(null); setDetailMissionId(null); }} type="button">
+            <ArrowLeft size={16} />
+            Zur Gemeinde
+          </button>
+          <div>
+            <p className="eyebrow">Waldgebiet</p>
+            <h1>{detailArea.name}</h1>
+            <small>{detailArea.hectares.toLocaleString("de-DE")} ha · {detailArea.scopeName}</small>
+          </div>
+          <button className="commandButton primary" onClick={onOpenGeo} type="button">
+            <MapPinned size={16} />
+            In GeoID öffnen
+          </button>
+        </header>
+        <main className="forestDetailLayout">
+          <section className="forestDetailMapPanel">
+            <MapContainer
+              center={toLatLng(centroidOf(detailArea.polygon))}
+              zoom={15}
+              minZoom={12}
+              maxZoom={19}
+              maxBoundsViscosity={1}
+              scrollWheelZoom
+              preferCanvas
+              className="forestDetailMap"
+            >
+              <ForestAreaViewport bounds={detailAreaBounds} />
+              <ForestDrawingCapture enabled={canManage && isMissionPlannerOpen} onPick={(coordinate) => {
+                const geometry = { coordinates: [detailArea.polygon.map((point) => [point.lng, point.lat])] };
+                if (!geometryContainsCoordinate(geometry, coordinate)) {
+                  setMissionPlannerFeedback("Routenpunkte müssen innerhalb des Waldgebiets liegen.");
+                  return;
+                }
+                setMissionRoute((current) => [...current, coordinate]);
+                setMissionPlannerFeedback(null);
+              }} />
+              <TileLayer
+                attribution={baseMaps[adminBaseMapId].attribution}
+                maxZoom={19}
+                maxNativeZoom={adminBaseMapId === "satellite" ? 19 : adminBaseMapId === "topo" ? 17 : 19}
+                url={baseMaps[adminBaseMapId].url}
+              />
+              <Polygon
+                positions={detailArea.polygon.map(toLatLng)}
+                pathOptions={{ color: "#fbbf24", fillColor: "#16a34a", fillOpacity: 0.3, weight: 4 }}
+              >
+                <Tooltip permanent direction="center">{detailArea.name}</Tooltip>
+              </Polygon>
+              {detailMissionHeatmap && <ImageOverlay url={detailMissionHeatmap.url} bounds={detailMissionHeatmap.bounds} opacity={0.72} interactive={false} />}
+              {detailMission?.missionPath && <Polyline positions={missionPathSegments(detailMission.missionPath).map((segment) => segment.map(toLatLng))} pathOptions={{ color: "#0f766e", weight: 4, opacity: 0.9 }}>
+                <Tooltip>{detailMission.title} · gespeicherter Missionsweg</Tooltip>
+              </Polyline>}
+              {osmForestPaths.map((path) => (
+                <Polyline
+                  key={`osm-path-${path.id}`}
+                  positions={path.coordinates.map(toLatLng)}
+                  bubblingMouseEvents={false}
+                  eventHandlers={{ mouseover: () => setHoveredOsmPathId(path.id), mouseout: () => setHoveredOsmPathId(null), click: () => {
+                    if (!canManage || !isMissionPlannerOpen) return;
+                    setMissionRoute(path.coordinates);
+                    setMissionPlannerFeedback(`${path.name} wurde als Missionsroute übernommen.`);
+                  } }}
+                  pathOptions={{ color: hoveredOsmPathId === path.id ? "#f59e0b" : "#0f766e", weight: hoveredOsmPathId === path.id ? 7 : isMissionPlannerOpen ? 5 : 3, opacity: 0.96, renderer: detailOsmPathRenderer }}
+                >
+                  <Tooltip sticky>{isMissionPlannerOpen ? `${path.name} · anklicken und als Route übernehmen` : path.name}</Tooltip>
+                </Polyline>
+              ))}
+              {missionRoute.length > 0 && (
+                <Polyline positions={missionRoute.map(toLatLng)} pathOptions={{ color: "#2563eb", weight: 4, dashArray: "8 6" }} />
+              )}
+              {missionRoute.map((point, index) => (
+                <CircleMarker key={`${point.lat}-${point.lng}-${index}`} center={toLatLng(point)} radius={5} pathOptions={{ color: "#fff", fillColor: "#2563eb", fillOpacity: 1, weight: 2 }}>
+                  <Tooltip>{`Routenpunkt ${index + 1}`}</Tooltip>
+                </CircleMarker>
+              ))}
+            </MapContainer>
+            <div className="mapOverlay forestDetailBaseMaps" aria-label="Basiskarte">
+              {(["street", "topo", "satellite"] as BaseMapId[]).map((mapId) => (
+                <button key={mapId} className={adminBaseMapId === mapId ? "active" : ""} onClick={() => setAdminBaseMapId(mapId)} type="button">
+                  {mapId === "street" ? "Karte" : mapId === "topo" ? "Topo" : "Satellit"}
+                </button>
+              ))}
+            </div>
+            {detailMission && <label className="mapOverlay forestDetailHeatmapSelect">
+              Heatmap-Wert
+              <select value={detailHeatmapLayerId} onChange={(event) => setDetailHeatmapLayerId(event.target.value as LayerId)} disabled={!detailMission.missionPath}>
+                {layerDefinitions.filter((layer) => !copernicusLayerIds.includes(layer.id)).map((layer) => <option key={layer.id} value={layer.id}>{layer.name}</option>)}
+              </select>
+              <small>{detailMission.missionPath ? `${detailMission.title} · stetig interpoliert` : "Für diese Mission ist noch kein Weg gespeichert."}</small>
+            </label>}
+            <div className="mapOverlay forestMissionTimeline">
+              <button className="primaryIconButton" type="button" disabled={chronologicalDetailMissions.length === 0} onClick={() => {
+                if (!isTimelinePlaying && timelineIndex >= chronologicalDetailMissions.length - 1) setTimelineIndex(0);
+                const mission = chronologicalDetailMissions[timelineIndex >= chronologicalDetailMissions.length ? 0 : timelineIndex];
+                if (mission) setDetailMissionId(mission.id);
+                setIsTimelinePlaying((playing) => !playing);
+              }} aria-label={isTimelinePlaying ? "Zeitreihe pausieren" : "Zeitreihe abspielen"}>{isTimelinePlaying ? <Pause size={17} /> : <Play size={17} />}</button>
+              <label>Von<input type="date" value={timelineFrom} onChange={(event) => { setTimelineFrom(event.target.value); setTimelineIndex(0); setIsTimelinePlaying(false); }} /></label>
+              <label>Bis<input type="date" value={timelineTo} onChange={(event) => { setTimelineTo(event.target.value); setTimelineIndex(0); setIsTimelinePlaying(false); }} /></label>
+              <div className="forestMissionTimelineSlider">
+                <span>{chronologicalDetailMissions.length > 0 ? new Date(chronologicalDetailMissions[timelineIndex]?.requestedAt ?? chronologicalDetailMissions[0].requestedAt).toLocaleDateString("de-DE") : "Keine Missionsdaten im Zeitraum"}</span>
+                <input type="range" min={0} max={Math.max(0, chronologicalDetailMissions.length - 1)} value={Math.min(timelineIndex, Math.max(0, chronologicalDetailMissions.length - 1))} disabled={chronologicalDetailMissions.length === 0} onChange={(event) => {
+                  const nextIndex = Number(event.target.value);
+                  setTimelineIndex(nextIndex);
+                  setIsTimelinePlaying(false);
+                  const mission = chronologicalDetailMissions[nextIndex];
+                  if (mission) setDetailMissionId(mission.id);
+                }} />
+                <small>{chronologicalDetailMissions.length} Missionen chronologisch</small>
+              </div>
+            </div>
+          </section>
+          <aside className="forestMissionPanel">
+            <div className="forestMissionHeading">
+              <div>
+                <p className="eyebrow">Missionen</p>
+                <h2>{detailArea.name}</h2>
+              </div>
+              <span>{detailAreaMissions.length}</span>
+            </div>
+            <div className={`osmPathStatus ${osmPathState}`}>
+              <span>Vorhandene Waldwege</span>
+              <strong>{osmPathState === "loading" ? `Wege werden geladen … ${osmPathProgress}%` : osmPathState === "error" ? "Wegdaten derzeit nicht verfügbar" : `${osmForestPaths.length} Wege im Gebiet`}</strong>
+              {osmPathState === "loading" && <progress max={100} value={osmPathProgress}>{osmPathProgress}%</progress>}
+              {osmPathState === "error" && <button className="textButton" type="button" onClick={() => setOsmReloadKey((value) => value + 1)}>Wegenetz erneut laden</button>}
+              {osmPathState === "ready" && osmForestPaths.length > 0 && <small>OpenStreetMap-Wegdaten · auf einen grünen Weg klicken, um ihn bei geöffneter Planung zu übernehmen.</small>}
+            </div>
+            {canManage && <button className={`commandButton primary forestMissionPlanButton ${isMissionTypeChoiceOpen ? "active" : ""}`} onClick={() => { setIsMissionTypeChoiceOpen((open) => !open); setMissionPlannerFeedback(null); }} type="button">
+              <Plus size={16} />
+              {isMissionTypeChoiceOpen ? "Auswahl schließen" : "Mission erstellen"}
+            </button>}
+            {canManage && isMissionTypeChoiceOpen && (
+              <div className="missionTypeChoice">
+                <button onClick={() => {
+                  onOpenRealMissionUpload(detailArea.id, missionRoute.length >= 2 ? missionRoute : []);
+                }} type="button">
+                  <span>A · Reale Mission</span>
+                  <strong>Mission anlegen & Daten hochladen</strong>
+                  <small>Öffnet eine getrennte Upload-Maske. Dateien bleiben bis zur Prüfung als real / ungeprüft markiert.</small>
+                  <Upload size={18} />
+                </button>
+                <button onClick={() => {
+                  onOpenMockMission(detailArea.id, []);
+                }} type="button">
+                  <span>B · Mock-Mission</span>
+                  <strong>Mock-Daten in GeoID konfigurieren</strong>
+                  <small>Öffnet den vorhandenen Scenario Builder mit Waldgebiet und Route als Kontext.</small>
+                  <BarChart3 size={18} />
+                </button>
+                <button className="missionTypeManual" onClick={() => { setIsMissionPlannerOpen(true); setIsMissionTypeChoiceOpen(false); }} type="button">
+                  Route zuerst manuell planen
+                </button>
+              </div>
+            )}
+            {canManage && isMissionPlannerOpen && (
+              <form className="forestMissionPlanner" onSubmit={(event) => {
+                event.preventDefault();
+                if (!missionTitle.trim() || !missionObjective.trim()) { setMissionPlannerFeedback("Bitte Titel und Ziel der Mission angeben."); return; }
+                if (missionRoute.length < 2) { setMissionPlannerFeedback("Bitte mindestens zwei Punkte auf der Karte einzeichnen."); return; }
+                setMissionPlannerFeedback("Mission wird gespeichert …");
+                void onPlanForestMission(detailArea.id, { title: missionTitle, objective: missionObjective, priority: missionPriority, route: missionRoute, requestedAt: missionDate })
+                  .then(() => { setMissionPlannerFeedback("Mission wurde geplant."); setMissionRoute([]); setMissionTitle("Waldmission"); setMissionObjective("Zustandserfassung und Kontrollgang"); setIsMissionPlannerOpen(false); })
+                  .catch((error) => setMissionPlannerFeedback(errorMessage(error)));
+              }}>
+                <label className="fieldLabel">Titel<input value={missionTitle} onChange={(event) => setMissionTitle(event.target.value)} /></label>
+                <label className="fieldLabel">Missionsziel<textarea value={missionObjective} onChange={(event) => setMissionObjective(event.target.value)} /></label>
+                <label className="fieldLabel">Priorität<select value={missionPriority} onChange={(event) => setMissionPriority(event.target.value as PlannedMissionRecord["priority"])}><option value="normal">Normal</option><option value="hoch">Hoch</option><option value="kritisch">Kritisch</option></select></label>
+                <label className="fieldLabel">Erhebungsdatum<input type="date" value={missionDate} onChange={(event) => setMissionDate(event.target.value)} required /></label>
+                <p className="missionDrawHint"><MapPinned size={15} />Auf die Karte klicken, um die Route einzuzeichnen. Aktuell: {missionRoute.length} Punkte.</p>
+                <button className="commandButton osmPathAdoptButton" onClick={() => {
+                  const longest = osmForestPaths.reduce<OsmForestPath | null>((best, path) => !best || path.coordinates.length > best.coordinates.length ? path : best, null);
+                  if (!longest) { setMissionPlannerFeedback("In diesem Waldgebiet wurde kein übernehmbarer Weg gefunden."); return; }
+                  setMissionRoute(longest.coordinates);
+                  setMissionPlannerFeedback(`${longest.name} wurde als Missionsroute übernommen.`);
+                }} disabled={osmForestPaths.length === 0} type="button">
+                  <MapPinned size={15} />Längsten vorhandenen Weg übernehmen
+                </button>
+                <div className="forestMissionPlannerActions">
+                  <button className="commandButton" onClick={() => { setIsMissionPlannerOpen(false); setMissionPlannerFeedback(null); }} type="button"><ArrowLeft size={15} />Planung schließen</button>
+                  <button className="commandButton" onClick={() => setMissionRoute((current) => current.slice(0, -1))} disabled={missionRoute.length === 0} type="button"><Undo2 size={15} />Punkt zurück</button>
+                  <button className="commandButton" onClick={() => setMissionRoute([])} disabled={missionRoute.length === 0} type="button"><Trash2 size={15} />Route leeren</button>
+                  <button className="commandButton primary" disabled={missionRoute.length < 2} type="submit"><Save size={15} />Mission speichern</button>
+                </div>
+                {missionPlannerFeedback && <p className="missionPlannerFeedback" role="status">{missionPlannerFeedback}</p>}
+              </form>
+            )}
+            {detailAreaMissions.length === 0 ? (
+              <p className="emptyRecordHistory">Für dieses Waldgebiet sind noch keine Missionen hinterlegt.</p>
+            ) : (
+              <div className="forestMissionList">
+                {detailAreaMissions.map((mission) => (
+                  <div key={mission.id} className="forestMissionRow">
+                    <button className={`forestMissionOpenButton ${detailMissionId === mission.id ? "selected" : ""}`} onClick={() => setDetailMissionId((current) => current === mission.id ? null : mission.id)} type="button" aria-label={`${mission.title} auf der Waldkarte auswählen`}>
+                      <span>{new Date(mission.requestedAt).toLocaleDateString("de-DE")} · Priorität {mission.priority}</span>
+                      <strong>{mission.title}</strong>
+                      <small>{mission.objective}</small>
+                      <Eye className="forestMissionOpenIcon" size={17} aria-hidden="true" />
+                    </button>
+                    {detailMissionId === mission.id && <button className="commandButton forestMissionEnterButton" onClick={() => onOpenMission(mission)} type="button">Missionsansicht öffnen</button>}
+                    {canManage && <button className="forestMissionDeleteButton" onClick={() => { if (window.confirm(`${mission.title} wirklich löschen?`)) void onDeleteMission(mission.id); }} type="button" aria-label={`${mission.title} löschen`} title="Mission löschen">
+                      <Trash2 size={15} />
+                    </button>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {detailMission && (
+              <div className="forestMissionDetail">
+                <span>Ausgewählte Mission</span>
+                <strong>{detailMission.title}</strong>
+                <dl>
+                  <div><dt>Auftraggeber</dt><dd>{detailMission.customer}</dd></div>
+                  <div><dt>Szenario</dt><dd>{detailMission.scenarioName}</dd></div>
+                  <div><dt>Route</dt><dd>{detailMission.pathName}</dd></div>
+                  <div><dt>Seed</dt><dd>{detailMission.seed}</dd></div>
+                </dl>
+              </div>
+            )}
+            <p className="provenanceNote">Angezeigt werden ausschließlich Missionen, deren gespeicherte <code>areaId</code> diesem Waldgebiet entspricht.</p>
+          </aside>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="portalShell adminMapShell">
       <header className="portalTopbar">
@@ -2467,11 +3263,17 @@ function BadenWuerttembergMapPage({
               <Polygon
                 key={area.id}
                 positions={area.polygon.map(toLatLng)}
-                eventHandlers={{ click: () => onSelectArea(area.id) }}
-                pathOptions={{ color: area.id === selectedAreaId ? "#fbbf24" : "#22c55e", fillColor: "#16a34a", fillOpacity: area.boundaryStatus === "pending" ? 0.08 : area.id === selectedAreaId ? 0.38 : 0.24, weight: area.id === selectedAreaId ? 4 : 2, dashArray: area.boundaryStatus === "pending" ? "7 6" : undefined }}
+                eventHandlers={{ click: () => selectOrOpenArea(area) }}
+                pathOptions={{
+                  color: area.id === selectedAreaId ? "#fbbf24" : "#22c55e",
+                  fillColor: showForestAverages && latestSummaryByArea.get(area.id)?.routeSummary ? dryStressSummaryColor(latestSummaryByArea.get(area.id)!.routeSummary!.averageDryStress) : "#16a34a",
+                  fillOpacity: area.boundaryStatus === "pending" ? 0.08 : showForestAverages && latestSummaryByArea.has(area.id) ? 0.55 : area.id === selectedAreaId ? 0.38 : 0.24,
+                  weight: area.id === selectedAreaId ? 4 : 2,
+                  dashArray: area.boundaryStatus === "pending" ? "7 6" : undefined,
+                }}
               >
-                <Tooltip permanent direction="center">
-                  {area.name}
+                <Tooltip sticky direction="center">
+                  {area.name}{showForestAverages && latestSummaryByArea.get(area.id)?.routeSummary ? ` · ${Math.round(latestSummaryByArea.get(area.id)!.routeSummary!.averageDryStress * 100)}% abgeleitet` : ""}
                 </Tooltip>
               </Polygon>
             ))}
@@ -2578,7 +3380,22 @@ function BadenWuerttembergMapPage({
                   })}
                 </div>
               )}
-              {isDistrictFocusMode && (
+              {isDistrictFocusMode && <div className="forestDrawPanel forestAveragePanel">
+                <div><span>Zeitbezogener Waldzustand</span><strong>Routendurchschnitt auf Waldfläche projizieren</strong></div>
+                <label className="fieldLabel"><span><input type="checkbox" checked={showForestAverages} onChange={(event) => setShowForestAverages(event.target.checked)} /> Flächenfärbung anzeigen</span></label>
+                <label className="fieldLabel">Zeitraum
+                  <select value={forestAveragePeriodMode} onChange={(event) => { setForestAveragePeriodMode(event.target.value as "month" | "quarter"); setSelectedForestAveragePeriod(""); }}>
+                    <option value="month">Monat</option><option value="quarter">Quartal</option>
+                  </select>
+                </label>
+                <label className="fieldLabel">Periode
+                  <select value={activeForestAveragePeriod} onChange={(event) => setSelectedForestAveragePeriod(event.target.value)} disabled={availableForestAveragePeriods.length === 0}>
+                    {availableForestAveragePeriods.length === 0 ? <option value="">Noch keine gespeicherten Werte</option> : availableForestAveragePeriods.map((period) => <option key={period} value={period}>{formatMissionPeriod(period)}</option>)}
+                  </select>
+                </label>
+                <small>Je Waldgebiet wird der zuletzt gespeicherte Missionswert der Periode gezeigt. Die Farbe ist aus dem befahrenen Weg abgeleitet und keine flächendeckende Messung.</small>
+              </div>}
+              {canManage && isDistrictFocusMode && (
                 <div className="forestDrawPanel">
                   <div>
                     <span>Einsatzgebiet abgrenzen</span>
@@ -2623,7 +3440,7 @@ function BadenWuerttembergMapPage({
                       visibleForestAreas.map((area) => (
                         <div key={area.id} className={area.id === selectedAreaId ? "selected" : ""}>
                           <span className="forestAreaListHeader">
-                            <button className="forestAreaSelect" onClick={() => onSelectArea(area.id)} type="button"><strong>{area.name}</strong></button>
+                            <button className="forestAreaSelect" onClick={() => selectOrOpenArea(area)} type="button"><strong>{area.name}</strong></button>
                             <button className="iconButton danger" onClick={() => void onArchiveArea(area.id)} type="button" aria-label={`${area.name} archivieren`}>
                               <FolderOpen size={14} />
                             </button>
@@ -2659,419 +3476,8 @@ function BadenWuerttembergMapPage({
   );
 }
 
-function PortalPage({
-  municipalities,
-  areas,
-  missions,
-  selectedMunicipalityId,
-  liveWeather,
-  weatherStatus,
-  biodiversityMetrics,
-  indexDefinitions,
-  onSelectMunicipality,
-  onOpenMission,
-  onOpenAreaMap,
-  onCreateMunicipality,
-  onEditMunicipality,
-  onArchiveMunicipality,
-  onCreateStakeholder,
-  onEditStakeholder,
-  onArchiveStakeholder,
-  onCreateArea,
-  onEditArea,
-  onArchiveArea,
-  onPlanMission,
-  managementDialog,
-  editingArea,
-  editingMunicipality,
-  editingStakeholder,
-  onCloseDialog,
-  onSubmitDialog,
-  feedback,
-  pendingSyncCount,
-  onOpenIndexBuilder,
-  onOpenHyperion,
-  onOpenAdminMap,
-  onOpenRegionalOverview,
-}: {
-  municipalities: Municipality[];
-  areas: DeploymentArea[];
-  missions: CustomerMissionTemplate[];
-  selectedMunicipalityId: string;
-  liveWeather: LiveWeather;
-  weatherStatus: "loading" | "live" | "fallback";
-  biodiversityMetrics: BiodiversityMetrics;
-  indexDefinitions: IndexDefinitionDemo[];
-  onSelectMunicipality: (municipalityId: string) => void;
-  onOpenMission: (mission: CustomerMissionTemplate, startProcessing: boolean) => void;
-  onOpenAreaMap: (areaId: string) => void;
-  onCreateMunicipality: () => void;
-  onEditMunicipality: (municipalityId: string) => void;
-  onArchiveMunicipality: (municipalityId: string) => Promise<void>;
-  onCreateStakeholder: () => void;
-  onEditStakeholder: (stakeholderId: string) => void;
-  onArchiveStakeholder: (stakeholderId: string) => Promise<void>;
-  onCreateArea: () => void;
-  onEditArea: (areaId: string) => void;
-  onArchiveArea: (areaId: string) => Promise<void>;
-  onPlanMission: () => void;
-  managementDialog: "municipality" | "stakeholder" | "area" | "mission" | null;
-  editingArea: DeploymentArea | null;
-  editingMunicipality: MunicipalityRecord | null;
-  editingStakeholder: StakeholderRecord | null;
-  onCloseDialog: () => void;
-  onSubmitDialog: (values: ManagementFormData) => Promise<void>;
-  feedback: { tone: "success" | "error" | "loading"; message: string } | null;
-  pendingSyncCount: number;
-  onOpenIndexBuilder: () => void;
-  onOpenHyperion: () => void;
-  onOpenAdminMap: () => void;
-  onOpenRegionalOverview: () => void;
-}) {
-  const selectedMunicipality = municipalities.find((item) => item.id === selectedMunicipalityId) ?? municipalities[0];
-  const municipalityMissions = missions.filter((mission) => selectedMunicipality.missionIds.includes(mission.id));
-  const activeAreas = selectedMunicipality.areas.filter((area) => area.status === "aktiv").length;
-
-  return (
-    <div className="portalShell">
-      <header className="portalTopbar">
-        <div className="portalBrand">
-          <div className="brandMark">
-            <Satellite size={20} />
-          </div>
-          <div>
-            <p className="eyebrow">Project Athene</p>
-            <h1>Kommunale Einsatzplattform</h1>
-          </div>
-        </div>
-        <div className="portalLogin">
-          <Users size={16} />
-          <span>Demo-Rollenkontext</span>
-          <strong>Operator</strong>
-        </div>
-        <div className="portalTopActions">
-          <button className="commandButton" onClick={onOpenRegionalOverview} type="button">
-            <Sprout size={16} />
-            Waldzustandsübersicht
-          </button>
-          <button className="commandButton" onClick={onOpenHyperion} type="button">
-            <Layers size={16} />
-            Hyperion
-          </button>
-          <button className="commandButton" onClick={onOpenIndexBuilder} type="button">
-            <BarChart3 size={16} />
-            Index Builder
-          </button>
-        </div>
-      </header>
-
-      <main className="portalMain">
-        {feedback && <div className={`managementFeedback ${feedback.tone}`} role={feedback.tone === "error" ? "alert" : "status"}>{feedback.message}</div>}
-        {pendingSyncCount > 0 && <div className="syncQueueStatus" role="status">{pendingSyncCount} lokale Änderung(en) warten auf Synchronisierung.</div>}
-        <section className="portalHero">
-          <div>
-            <p className="eyebrow">Zentrale Verwaltung</p>
-            <h2>Gemeinden, Einsatzgebiete und Waldmissionen anlegen.</h2>
-            <p>
-              Diese Portalebene ist der Einstieg vor der GeoID-Maske. Hier werden kommunale Mandanten, Rollen, Flächen und Missionen verwaltet; die Detailanalyse öffnet anschließend die Karten- und Playback-Ansicht.
-            </p>
-          </div>
-          <div className="portalAuthCard">
-            <span>Demo-Kontext (keine Authentifizierung)</span>
-            <strong>athene.operator@demo.local</strong>
-            <small>Verwaltungsrolle: Gemeinden, Missionen, Records</small>
-          </div>
-          <div className={`weatherCard ${liveWeather.fireWeatherHint}`}>
-            <span>{weatherStatus === "live" ? "Live Wetter" : weatherStatus === "loading" ? "Wetter lädt" : "Demo Wetter"}</span>
-            <strong>{liveWeather.temperature.toFixed(1)} °C · {liveWeather.humidity}% RH</strong>
-            <small>
-              {describeWeatherCode(liveWeather.weatherCode)} · Böen {Math.round(liveWeather.windGusts)} km/h · {liveWeather.precipitation.toFixed(1)} mm
-            </small>
-            <em>Brandwetter: {liveWeather.fireWeatherHint}</em>
-          </div>
-        </section>
-
-        <section className="portalGrid">
-          <aside className="municipalityRail">
-            <PanelTitle icon={<Building2 size={18} />} title="Gemeinden" />
-            <div className="municipalityList">
-              {municipalities.map((municipality) => (
-                <div key={municipality.id} className={`municipalityButtonWrap ${municipality.id === selectedMunicipality.id ? "active" : ""}`}>
-                  <button className="municipalityButton" onClick={() => onSelectMunicipality(municipality.id)} type="button">
-                    <span>{municipality.type}</span><strong>{municipality.name}</strong><small>{municipality.region}</small>
-                  </button>
-                  <div className="entityActions">
-                    <button className="iconButton" onClick={() => onEditMunicipality(municipality.id)} aria-label={`${municipality.name} bearbeiten`} type="button"><Wrench size={13} /></button>
-                    <button className="iconButton danger" onClick={() => void onArchiveMunicipality(municipality.id)} aria-label={`${municipality.name} archivieren`} type="button"><FolderOpen size={13} /></button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <button className="portalMapButton" onClick={onOpenAdminMap} type="button">
-              <MapPinned size={16} />
-              Kartenansicht
-            </button>
-            <button className="portalAddButton" onClick={onCreateMunicipality} type="button">
-              <Plus size={16} />
-              Gemeinde anlegen
-            </button>
-          </aside>
-
-          <section className="portalDetail">
-            <div className="portalSectionHeader">
-              <div>
-                <p className="eyebrow">{selectedMunicipality.type}</p>
-                <h2>{selectedMunicipality.name}</h2>
-                <span>{selectedMunicipality.region}</span>
-              </div>
-              <button className="commandButton primary" onClick={onCreateArea} type="button">
-                <Plus size={16} />
-                Einsatzgebiet
-              </button>
-            </div>
-
-            <div className="portalStats">
-              <OverviewMetric label="Einwohner" value={selectedMunicipality.population.toLocaleString("de-DE")} detail="Mandantendaten" />
-              <OverviewMetric label="Stakeholder" value={`${selectedMunicipality.stakeholders.length}`} detail="Rollen im Portal" />
-              <OverviewMetric label="Einsatzgebiete" value={`${selectedMunicipality.areas.length}`} detail={`${activeAreas} aktiv`} />
-              <OverviewMetric label="Missionen" value={`${municipalityMissions.length}`} detail="bereit für GeoID" />
-              <OverviewMetric label="Wetterquelle" value={liveWeather.source === "open-meteo" ? "Live" : "Fallback"} detail={new Date(liveWeather.fetchedAt).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })} />
-            </div>
-
-            <div className="portalStats knowledgeStats">
-              <OverviewMetric label="Taxa" value={`${speciesCatalog.length}`} detail={`${plantCatalog.length} Pflanzen · ${speciesCatalog.length - plantCatalog.length} Vögel`} />
-              <OverviewMetric label="Mission Richness" value={`${biodiversityMetrics.richness}`} detail={`${biodiversityMetrics.validObservationCount} gültige Beobachtungen`} />
-              <OverviewMetric label="Shannon" value={biodiversityMetrics.shannon.toFixed(2)} detail={`Simpson ${biodiversityMetrics.simpson.toFixed(2)}`} />
-              <OverviewMetric label="Audioaktivität" value={`${biodiversityMetrics.acousticActivityRate}`} detail="Events je Audio-Stunde" />
-              <OverviewMetric label="Index Builder" value={`${indexDefinitions.length}`} detail="versionierte Indizes" />
-            </div>
-
-            <div className="portalColumns">
-              <section className="portalPanel">
-                <div className="panelTitleActions"><PanelTitle icon={<Users size={18} />} title="Stakeholder" /><button className="iconButton" onClick={onCreateStakeholder} aria-label="Stakeholder hinzufügen" type="button"><Plus size={16} /></button></div>
-                <div className="stakeholderList">
-                  {selectedMunicipality.stakeholders.map((stakeholder) => (
-                    <div key={stakeholder.id} className="stakeholderRow">
-                      <div>
-                        <strong>{stakeholder.name}</strong>
-                        <span>{stakeholder.role}</span>
-                      </div>
-                      <small>{stakeholder.access}</small>
-                      <div className="entityActions">
-                        <button className="iconButton" onClick={() => onEditStakeholder(stakeholder.id)} aria-label={`${stakeholder.name} bearbeiten`} type="button"><Wrench size={13} /></button>
-                        <button className="iconButton danger" onClick={() => void onArchiveStakeholder(stakeholder.id)} aria-label={`${stakeholder.name} archivieren`} type="button"><FolderOpen size={13} /></button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              <section className="portalPanel">
-                <PanelTitle icon={<MapPinned size={18} />} title="Einsatzgebiete" />
-                <div className="areaList">
-                  {selectedMunicipality.areas.map((area) => (
-                    <div key={area.id} className={`areaRow ${area.status}`}>
-                      <button className="areaRowMain" onClick={() => onOpenAreaMap(area.id)} type="button" title="Einsatzgebiet auf der Karte fokussieren">
-                        <strong>{area.name}</strong>
-                        <span>{area.focus}</span>
-                      </button>
-                      <small>{area.boundaryStatus === "pending" ? "Grenze ausstehend" : `${area.hectares} ha`} · {area.status}</small>
-                      <div className="areaRowActions">
-                        <button className={area.boundaryStatus === "pending" ? "commandButton boundaryAction" : "iconButton"} onClick={() => onOpenAreaMap(area.id)} title={area.boundaryStatus === "pending" ? "Grenze auf Karte einzeichnen" : "Auf Karte öffnen"} aria-label={`${area.name} ${area.boundaryStatus === "pending" ? "Grenze auf Karte einzeichnen" : "auf Karte öffnen"}`} type="button"><MapPinned size={14} />{area.boundaryStatus === "pending" && "Grenze auf Karte einzeichnen"}</button>
-                        <button className="iconButton" onClick={() => onEditArea(area.id)} title="Bearbeiten" aria-label={`${area.name} bearbeiten`} type="button"><Wrench size={14} /></button>
-                        <button className="iconButton danger" onClick={() => void onArchiveArea(area.id)} title="Archivieren" aria-label={`${area.name} archivieren`} type="button"><FolderOpen size={14} /></button>
-                      </div>
-                    </div>
-                  ))}
-                  {selectedMunicipality.areas.length === 0 && <p className="emptyRecordHistory">Noch keine Einsatzgebiete angelegt.</p>}
-                </div>
-              </section>
-            </div>
-
-            <section className="portalPanel">
-              <div className="panelTitleActions"><PanelTitle icon={<ClipboardList size={18} />} title="Missionen" /><button className="commandButton" onClick={onPlanMission} type="button"><Plus size={15} />Mission planen</button></div>
-              <div className="portalMissionList">
-                {municipalityMissions.map((missionTemplate) => (
-                  <div key={missionTemplate.id} className={`portalMissionRow ${missionTemplate.priority}`}>
-                    <div>
-                      <span>{missionTemplate.areaName} · {missionTemplate.priority}</span>
-                      <strong>{missionTemplate.title}</strong>
-                      <p>{missionTemplate.objective}</p>
-                    </div>
-                    <button className="commandButton" onClick={() => onOpenMission(missionTemplate, false)} type="button">
-                      <MapPinned size={16} />
-                      GeoID öffnen
-                    </button>
-                    <button className="commandButton primary" onClick={() => onOpenMission(missionTemplate, true)} disabled={!hasDefinedMissionPath(missionTemplate)} title={!hasDefinedMissionPath(missionTemplate) ? "Noch kein Missionspfad definiert" : undefined} type="button">
-                      <Play size={16} />
-                      Daten verarbeiten
-                    </button>
-                    {!hasDefinedMissionPath(missionTemplate) && <small className="missionPathMissing">Noch kein Missionspfad definiert</small>}
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="portalPanel">
-              <PanelTitle icon={<Sprout size={18} />} title="Artenwissensbasis & Index Builder" />
-              <div className="knowledgeGrid">
-                <div>
-                  <span>Starterkatalog</span>
-                  <strong>{speciesCatalog.length} Taxa mit Quelle, Habitat, Detektion und Mindestconfidence</strong>
-                  <small>{speciesQualityRules[1]}</small>
-                </div>
-                <div>
-                  <span>Freigaberegel</span>
-                  <strong>{indexDefinitions[0]?.status ?? "EXPERIMENTAL"}</strong>
-                  <small>{speciesQualityRules[6]}</small>
-                </div>
-                <div>
-                  <span>Index Preview</span>
-                  <strong>{indexDefinitions[0]?.name ?? "Neuer Index"}</strong>
-                  <small>{indexDefinitions[0]?.interpretationLimit ?? "Noch keine Definition gespeichert"}</small>
-                </div>
-              </div>
-              <button className="indexBuilderOpenButton" onClick={onOpenIndexBuilder} type="button">
-                <BarChart3 size={16} />
-                Index Builder öffnen
-              </button>
-            </section>
-          </section>
-        </section>
-      </main>
-      {managementDialog && (
-        <ManagementDialog
-          kind={managementDialog}
-          municipality={selectedMunicipality}
-          areas={areas.filter((area) => area.municipalityId === selectedMunicipality.id && area.status !== "archiviert")}
-          editingArea={editingArea}
-          editingMunicipality={editingMunicipality}
-          editingStakeholder={editingStakeholder}
-          onClose={onCloseDialog}
-          onSubmit={onSubmitDialog}
-        />
-      )}
-    </div>
-  );
-}
-
-function ManagementDialog({
-  kind,
-  municipality,
-  areas,
-  editingArea,
-  editingMunicipality,
-  editingStakeholder,
-  onClose,
-  onSubmit,
-}: {
-  kind: "municipality" | "stakeholder" | "area" | "mission";
-  municipality: Municipality;
-  areas: DeploymentArea[];
-  editingArea: DeploymentArea | null;
-  editingMunicipality: MunicipalityRecord | null;
-  editingStakeholder: StakeholderRecord | null;
-  onClose: () => void;
-  onSubmit: (values: ManagementFormData) => Promise<void>;
-}) {
-  const [name, setName] = useState(editingArea?.name ?? editingMunicipality?.name ?? editingStakeholder?.name ?? "");
-  const [secondary, setSecondary] = useState(editingArea?.focus ?? editingMunicipality?.region ?? editingStakeholder?.role ?? "");
-  const [description, setDescription] = useState(editingArea?.description ?? "");
-  const [choice, setChoice] = useState(() => kind === "municipality" ? editingMunicipality?.type ?? "Gemeinde" : kind === "stakeholder" ? editingStakeholder?.access ?? "Viewer" : kind === "area" ? editingArea?.status ?? "aktiv" : areas[0]?.id ?? "");
-  const [extra, setExtra] = useState(() => kind === "municipality" ? String(editingMunicipality?.population ?? "") : kind === "mission" ? "normal" : "");
-
-  const title = kind === "municipality" ? editingMunicipality ? "Gemeinde bearbeiten" : "Gemeinde anlegen" : kind === "stakeholder" ? editingStakeholder ? "Stakeholder bearbeiten" : "Stakeholder hinzufügen" : kind === "area" ? editingArea ? "Einsatzgebiet bearbeiten" : "Einsatzgebiet anlegen" : "Mission planen";
-  const submit = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!name.trim()) return;
-    if (kind === "municipality") {
-      void onSubmit({ kind, name: name.trim(), type: (choice as MunicipalityRecord["type"]) || "Gemeinde", region: secondary.trim() || "Baden-Württemberg", population: Number(extra) || 0, center: municipality.center });
-    } else if (kind === "stakeholder") {
-      void onSubmit({ kind, name: name.trim(), role: secondary.trim() || "Fachliche Beteiligung", access: (choice as StakeholderRecord["access"]) || "Viewer" });
-    } else if (kind === "area") {
-      void onSubmit({ kind, name: name.trim(), focus: secondary.trim() || "Allgemeines Waldmonitoring", description, status: choice as DeploymentArea["status"] });
-    } else {
-      void onSubmit({ kind, areaId: choice, title: name.trim(), objective: secondary.trim(), priority: (extra as PlannedMissionRecord["priority"]) || "normal", requestedAt: new Date().toISOString() });
-    }
-  };
-
-  return (
-    <div className="dialogBackdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
-      <section className="managementDialog" role="dialog" aria-modal="true" aria-labelledby="management-dialog-title">
-        <form onSubmit={submit}>
-          <div className="portalSectionHeader">
-            <div><p className="eyebrow">Verwaltung</p><h2 id="management-dialog-title">{title}</h2></div>
-            <button className="iconButton" type="button" onClick={onClose} aria-label="Dialog schließen">×</button>
-          </div>
-          <label className="fieldLabel">{kind === "mission" ? "Missionstitel" : "Name"}<input autoFocus required value={name} onChange={(event) => setName(event.target.value)} /></label>
-          <label className="fieldLabel">{kind === "municipality" ? "Region" : kind === "stakeholder" ? "Rolle" : kind === "mission" ? "Ziel" : "Fokus"}<input value={secondary} onChange={(event) => setSecondary(event.target.value)} /></label>
-          {kind === "municipality" && <><label className="fieldLabel">Typ<select value={choice || "Gemeinde"} onChange={(event) => setChoice(event.target.value)}><option>Gemeinde</option><option>Stadt</option><option>Landkreis</option></select></label><label className="fieldLabel">Einwohner<input inputMode="numeric" value={extra} onChange={(event) => setExtra(event.target.value)} /></label></>}
-          {kind === "stakeholder" && <label className="fieldLabel">Zugriff (Verwaltungsangabe, keine Authentifizierung)<select value={choice || "Viewer"} onChange={(event) => setChoice(event.target.value)}><option>Admin</option><option>Operator</option><option>Viewer</option></select></label>}
-          {kind === "area" && <><label className="fieldLabel">Beschreibung<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label><label className="fieldLabel">Status<select value={choice} onChange={(event) => setChoice(event.target.value)}><option value="aktiv">Aktiv</option><option value="planung">Planung</option><option value="review">Review</option></select></label>{!editingArea && <p className="dialogHint">Es wird zunächst eine kleine Fläche am Gemeindezentrum angelegt. Die exakte Grenze kann anschließend in der Kartenansicht neu gezeichnet werden.</p>}</>}
-          {kind === "mission" && <><label className="fieldLabel">Einsatzgebiet<select required value={choice} onChange={(event) => setChoice(event.target.value)}>{areas.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</select></label><label className="fieldLabel">Priorität<select value={extra || "normal"} onChange={(event) => setExtra(event.target.value)}><option value="normal">Normal</option><option value="hoch">Hoch</option><option value="kritisch">Kritisch</option></select></label></>}
-          <div className="dialogActions"><button className="commandButton" type="button" onClick={onClose}>Abbrechen</button><button className="commandButton primary" type="submit" disabled={kind === "mission" && areas.length === 0}><Save size={16} />Speichern</button></div>
-        </form>
-      </section>
-    </div>
-  );
-}
-
-function FitCoordinateBounds({ polygon, padding = 48 }: { polygon: Coordinate[]; padding?: number }) {
-  const map = useMap();
-  useEffect(() => {
-    if (polygon.length < 3) return;
-    map.fitBounds(polygon.map(toLatLng), { padding: [padding, padding], animate: false, maxZoom: 16 });
-  }, [map, padding, polygon]);
-  return null;
-}
-
-function AreaContextPage({ municipality, area, missions, records, onBackToPortal, onOpenMission, onOpenMap }: {
-  municipality: Municipality;
-  area: DeploymentArea;
-  missions: CustomerMissionTemplate[];
-  records: MissionRecord[];
-  onBackToPortal: () => void;
-  onOpenMission: (mission: CustomerMissionTemplate) => void;
-  onOpenMap: () => void;
-}) {
-  const aggregate = aggregateAreaRecords(area.id, records);
-  return (
-    <div className="portalShell areaContextShell">
-      <header className="portalTopbar"><div className="portalBrand"><div className="brandMark"><MapPinned size={20} /></div><div><p className="eyebrow">GeoID · Gebietsansicht</p><h1>{area.name}</h1></div></div><div className="portalTopActions"><button className="commandButton" onClick={onBackToPortal} type="button"><ArrowLeft size={16} />Portal</button><button className="commandButton" onClick={onOpenMap} type="button"><MapPinned size={16} />Auf Karte öffnen</button></div></header>
-      <main className="areaContextMain">
-        <section className="contextBreadcrumb" aria-label="Analysekontext">{municipality.name} <span>→</span> {area.name} <span>→</span> Alle Missionen</section>
-        <div className="contextModeSwitch"><button className="active" type="button">Gebietsansicht</button>{missions[0] && <button type="button" onClick={() => onOpenMission(missions[0])}>Missionsansicht</button>}</div>
-        <section className="areaContextGrid">
-          <div className="regionalMapCard"><MapContainer center={toLatLng(centroidOf(area.polygon))} zoom={14} className="regionalMap"><TileLayer attribution={baseMaps.street.attribution} url={baseMaps.street.url} /><FitCoordinateBounds polygon={area.polygon} /><Polygon positions={area.polygon.map(toLatLng)} pathOptions={{ color: "#0f766e", fillColor: "#14b8a6", fillOpacity: 0.28, weight: 3 }}><Tooltip permanent>{area.name} · {area.hectares.toLocaleString("de-DE")} ha</Tooltip></Polygon></MapContainer></div>
-          <aside className="areaAggregatePanel"><p className="eyebrow">Gebietsüberblick</p><h2>{aggregate.missionCount ? "Zusammengefasster Missionsstand" : "Keine Daten"}</h2><div className="statusGrid"><StatusPill label="Missionen" value={`${aggregate.missionCount}`} /><StatusPill label="Letzte Erhebung" value={aggregate.lastSurvey ? new Date(aggregate.lastSurvey).toLocaleDateString("de-DE") : "Keine Daten"} /><StatusPill label="Trockenstress" value={aggregate.dryStress === null ? "Keine Daten" : `${Math.round(aggregate.dryStress * 100)}%`} /><StatusPill label="Confidence" value={aggregate.confidence === null ? "Keine Daten" : `${Math.round(aggregate.confidence * 100)}%`} /><StatusPill label="Abdeckung" value={aggregate.coverageShare === null ? "Keine Daten" : `${Math.round(aggregate.coverageShare * 100)}%`} /><StatusPill label="Unbekannt" value={aggregate.unknownShare === null ? "Keine Daten" : `${Math.round(aggregate.unknownShare * 100)}%`} /></div><p className="provenanceNote">Datenherkunft: {aggregate.dataOrigin ?? "unbekannt"} · Status: {aggregate.dataStatus ?? "unbeobachtet"}. Nicht erhobene Flächen werden nicht als gesund bewertet.</p></aside>
-        </section>
-        <section className="portalPanel"><div className="panelTitleActions"><PanelTitle icon={<ClipboardList size={18} />} title="Missionen im Einsatzgebiet" /></div>{missions.length === 0 ? <p className="emptyRecordHistory">Für dieses Einsatzgebiet ist noch keine Mission geplant.</p> : <div className="portalMissionList">{missions.map((missionItem) => <div key={missionItem.id} className="portalMissionRow"><div><span>bereit · {missionItem.priority}</span><strong>{missionItem.title}</strong><p>{missionItem.objective}</p></div><button className="commandButton" type="button" onClick={() => onOpenMission(missionItem)}>Missionsansicht</button></div>)}</div>}</section>
-      </main>
-    </div>
-  );
-}
-
-function RegionalConditionOverview({ municipalities, areas, records, onBack, onOpenArea }: { municipalities: MunicipalityRecord[]; areas: DeploymentArea[]; records: MissionRecord[]; onBack: () => void; onOpenArea: (areaId: string) => void }) {
-  const [metric, setMetric] = useState<"dryStress" | "confidence" | "freshness">("dryStress");
-  const [municipalityId, setMunicipalityId] = useState("all");
-  const [status, setStatus] = useState("all");
-  const visible = areas.filter((area) => area.status !== "archiviert" && (municipalityId === "all" || area.municipalityId === municipalityId) && (status === "all" || area.status === status));
-  const polygons = visible.flatMap((area) => area.polygon);
-  const metricValue = (area: DeploymentArea): number | null => {
-    const aggregate = aggregateAreaRecords(area.id, records);
-    if (metric === "dryStress") return aggregate.dryStress;
-    if (metric === "confidence") return aggregate.confidence;
-    if (!aggregate.lastSurvey) return null;
-    return Math.max(0, 1 - (Date.now() - new Date(aggregate.lastSurvey).getTime()) / (1000 * 60 * 60 * 24 * 365));
-  };
-  const fill = (value: number | null) => value === null ? "#6b7280" : metric === "dryStress" ? colorForValue(value, getLayerDefinition("dryStress")) : metric === "confidence" ? colorForValue(value, getLayerDefinition("confidence")) : value > 0.65 ? "#16a34a" : value > 0.3 ? "#f59e0b" : "#dc2626";
-  const legend = metric === "dryStress" ? { low: "#10b981", lowLabel: "niedriger Stress", high: "#dc2626", highLabel: "hoher Stress" } : metric === "confidence" ? { low: "#6b7280", lowLabel: "niedrige Confidence", high: "#2563eb", highLabel: "hohe Confidence" } : { low: "#dc2626", lowLabel: "veraltet", high: "#16a34a", highLabel: "aktuell" };
-  return (
-    <div className="portalShell regionalOverviewShell"><header className="portalTopbar"><div className="portalBrand"><div className="brandMark"><Sprout size={20} /></div><div><p className="eyebrow">Alle Einsatzgebiete</p><h1>Waldzustandsübersicht</h1></div></div><button className="commandButton" onClick={onBack} type="button"><ArrowLeft size={16} />Portal</button></header><main className="regionalOverviewMain"><section className="regionalControls"><label>Darstellung<select value={metric} onChange={(event) => setMetric(event.target.value as typeof metric)}><option value="dryStress">Trockenstress</option><option value="confidence">Confidence</option><option value="freshness">Datenaktualität</option></select></label><label>Gemeinde<select value={municipalityId} onChange={(event) => setMunicipalityId(event.target.value)}><option value="all">Alle</option>{municipalities.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">Alle</option><option value="aktiv">Aktiv</option><option value="planung">Planung</option><option value="review">Review</option></select></label><div className="regionalLegend"><span><i style={{ background: "#6b7280" }} />Unbekannte Fläche</span><span><i style={{ background: legend.low }} />{legend.lowLabel}</span><span><i style={{ background: legend.high }} />{legend.highLabel}</span><span>Gestrichelt/transparent = Teilabdeckung</span></div></section><section className="regionalMapCard"><MapContainer center={[48.77, 9.3]} zoom={11} className="regionalMap"><TileLayer attribution={baseMaps.street.attribution} url={baseMaps.street.url} />{polygons.length >= 3 && <FitCoordinateBounds polygon={polygons} padding={64} />}{visible.map((area) => { const value = metricValue(area); const aggregate = aggregateAreaRecords(area.id, records); const coverageShare = aggregate.coverageShare ?? 0; const tooltip = <Tooltip><strong>{area.name}</strong><br />{value === null ? "Keine Daten" : metric === "freshness" ? `${Math.round(value * 100)}% Aktualität` : `${Math.round(value * 100)}%`}<br />Abdeckung {Math.round(coverageShare * 100)}% · unbekannt {Math.round((aggregate.unknownShare ?? 1) * 100)}%<br /><small>{value === null ? "unbeobachtet" : `${aggregate.dataOrigin}/${aggregate.dataStatus} · nur Teilabdeckung qualifiziert`}</small></Tooltip>; return <Fragment key={area.id}><Polygon positions={area.polygon.map(toLatLng)} eventHandlers={{ click: () => onOpenArea(area.id) }} pathOptions={{ color: "#4b5563", fillColor: "#6b7280", fillOpacity: 0.48, weight: 2 }}>{value === null ? tooltip : null}</Polygon>{value !== null && <Polygon positions={area.polygon.map(toLatLng)} eventHandlers={{ click: () => onOpenArea(area.id) }} pathOptions={{ color: "#ffffff", fillColor: fill(value), fillOpacity: 0.14 + coverageShare * 0.5, weight: 2, dashArray: coverageShare < 0.95 ? "7 6" : undefined }}>{tooltip}</Polygon>}</Fragment>; })}</MapContainer></section><p className="provenanceNote">Die Übersicht aggregiert ausschließlich die neueste Version je Mission. Grau bedeutet unbekannt. Farbige, transparente Flächen qualifizieren nur den abgedeckten Anteil; sie behaupten keinen flächendeckenden Messwert.</p></main></div>
-  );
-}
-
 function MissionOverviewPage({
+  canManage,
   scenarioName,
   missionId,
   vehicle,
@@ -3092,6 +3498,7 @@ function MissionOverviewPage({
   onDeleteRecord,
   onBack,
 }: {
+  canManage: boolean;
   scenarioName: string;
   missionId: string;
   vehicle: string;
@@ -3139,10 +3546,10 @@ function MissionOverviewPage({
             {forestAreaName} · {pathName} · {vehicle}
           </p>
         </div>
-        <button className="recordSaveButton" onClick={saveRecord} type="button" disabled={saveState === "saving"}>
+        {canManage && <button className="recordSaveButton" onClick={saveRecord} type="button" disabled={saveState === "saving"}>
           <Save size={17} />
           {saveState === "saving" ? "Speichert..." : saveState === "saved" ? "Gespeichert" : saveState === "failed" ? "API nicht erreichbar" : "Record speichern"}
-        </button>
+        </button>}
         <button className="recordExportButton" onClick={onExportCurrentRecord} type="button">
           <Download size={17} />
           Export
@@ -3269,9 +3676,9 @@ function MissionOverviewPage({
                   <button className="iconButton" aria-label="Record exportieren" title="Record exportieren" onClick={() => onExportRecord(record)} type="button">
                     <Download size={16} />
                   </button>
-                  <button className="iconButton danger" aria-label="Record löschen" title="Record löschen" onClick={() => onDeleteRecord(record.id)} type="button">
+                  {canManage && <button className="iconButton danger" aria-label="Record löschen" title="Record löschen" onClick={() => onDeleteRecord(record.id)} type="button">
                     <Trash2 size={16} />
-                  </button>
+                  </button>}
                 </div>
               ))}
             </div>
@@ -3408,17 +3815,6 @@ function PanelTitle({ icon, title }: { icon: ReactNode; title: string }) {
       <h2>{title}</h2>
     </div>
   );
-}
-
-function MapClickCapture({ enabled, onPick }: { enabled: boolean; onPick: (coordinate: Coordinate) => void }) {
-  useMapEvents({
-    click(event) {
-      if (!enabled) return;
-      onPick({ lat: event.latlng.lat, lng: event.latlng.lng });
-    },
-  });
-
-  return null;
 }
 
 function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
@@ -3923,9 +4319,30 @@ function buildForestPath(waypoints: Waypoint[], name: string): ForestPath {
   };
 }
 
-function calculateRouteLengthMeters(points: Coordinate[]): number {
+function calculateRouteLengthMeters(points: Array<Coordinate & { breakBefore?: boolean }>): number {
   if (points.length < 2) return 0;
-  return points.slice(1).reduce((sum, point, index) => sum + distanceBetweenCoordinatesMeters(points[index], point), 0);
+  return points.slice(1).reduce((sum, point, index) => point.breakBefore ? sum : sum + distanceBetweenCoordinatesMeters(points[index], point), 0);
+}
+
+function composeRouteSegments(baseRoute: Coordinate[], segments: OsmForestPath[]): Array<Coordinate & { breakBefore?: boolean }> {
+  const route: Array<Coordinate & { breakBefore?: boolean }> = baseRoute.map((point) => ({ lat: point.lat, lng: point.lng }));
+  for (const segment of segments) {
+    if (segment.coordinates.length < 2) continue;
+    let oriented = segment.coordinates;
+    if (route.length > 0) {
+      const last = route[route.length - 1];
+      const distanceToStart = distanceBetweenCoordinatesMeters(last, segment.coordinates[0]);
+      const distanceToEnd = distanceBetweenCoordinatesMeters(last, segment.coordinates[segment.coordinates.length - 1]);
+      if (distanceToEnd < distanceToStart) oriented = [...segment.coordinates].reverse();
+      if (distanceBetweenCoordinatesMeters(last, oriented[0]) < 1) oriented = oriented.slice(1);
+    }
+    route.push(...oriented.map((point, index) => ({
+      lat: point.lat,
+      lng: point.lng,
+      breakBefore: index === 0 && route.length > 0 && distanceBetweenCoordinatesMeters(route[route.length - 1], point) >= 3,
+    })));
+  }
+  return route;
 }
 
 function distanceBetweenCoordinatesMeters(a: Coordinate, b: Coordinate): number {
@@ -4003,7 +4420,7 @@ function buildForestAreaForPath(path: ForestPath, fallback: ForestArea): ForestA
   };
 }
 
-function buildWaypoints(coordinates: Coordinate[]): Waypoint[] {
+function buildWaypoints(coordinates: Array<Coordinate & { breakBefore?: boolean }>): Waypoint[] {
   return coordinates.map((coordinate, index) => ({
     id: `manual-wp-${String(index + 1).padStart(3, "0")}`,
     sequence: index + 1,
@@ -4011,7 +4428,16 @@ function buildWaypoints(coordinates: Coordinate[]): Waypoint[] {
     speedKmh: 2.8,
     lat: coordinate.lat,
     lng: coordinate.lng,
+    breakBefore: coordinate.breakBefore || undefined,
   }));
+}
+
+function splitRouteAtBreaks(waypoints: Waypoint[]): Waypoint[][] {
+  return waypoints.reduce<Waypoint[][]>((segments, waypoint) => {
+    if (segments.length === 0 || waypoint.breakBefore) segments.push([]);
+    segments[segments.length - 1].push(waypoint);
+    return segments;
+  }, []).filter((segment) => segment.length >= 2);
 }
 
 function round(value: number, decimals: number): number {
@@ -4073,6 +4499,15 @@ function readLocalCollection<T>(key: string, fallback: T[]): T[] {
     return Array.isArray(value) && value.length ? value as T[] : structuredClone(fallback);
   } catch {
     return structuredClone(fallback);
+  }
+}
+
+function readMunicipalityOrder(): string[] {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(municipalityOrderStorageKey) ?? "[]") as unknown;
+    return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
   }
 }
 
@@ -4189,4 +4624,27 @@ function slugify(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "") || "athene-szenario";
+}
+
+function missionPeriodKey(timestamp: string, mode: "month" | "quarter"): string {
+  const date = new Date(timestamp);
+  const year = date.getFullYear();
+  return mode === "month"
+    ? `${year}-${String(date.getMonth() + 1).padStart(2, "0")}`
+    : `${year}-Q${Math.floor(date.getMonth() / 3) + 1}`;
+}
+
+function formatMissionPeriod(period: string): string {
+  const quarter = period.match(/^(\d{4})-Q([1-4])$/);
+  if (quarter) return `${quarter[2]}. Quartal ${quarter[1]}`;
+  const month = period.match(/^(\d{4})-(\d{2})$/);
+  if (!month) return period;
+  return new Intl.DateTimeFormat("de-DE", { month: "long", year: "numeric" }).format(new Date(Number(month[1]), Number(month[2]) - 1, 1));
+}
+
+function dryStressSummaryColor(value: number): string {
+  if (value >= 0.68) return "#dc2626";
+  if (value >= 0.5) return "#f97316";
+  if (value >= 0.32) return "#eab308";
+  return "#22c55e";
 }

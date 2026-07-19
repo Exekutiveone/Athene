@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { DeploymentArea, MissionRecord, MunicipalityRecord, PlannedMissionRecord, SavedPathRecord, SavedScenarioRecord, StakeholderRecord } from "../src/domain.js";
 import { normalizeDeploymentArea, seedDeploymentAreas, seedMunicipalities, seedPlannedMissions, seedStakeholders } from "../src/management.js";
+import { createMissionPath, missionPathWaypointsFlat } from "../src/routeGeometry.js";
 
 export interface AtheneDatabase {
   version: 2;
@@ -90,7 +91,7 @@ export function normalizeDatabase(value: unknown): AtheneDatabase {
     deploymentAreas,
     municipalities: Array.isArray(database.municipalities) ? database.municipalities.filter(isMunicipality).map(normalizeMunicipality) : structuredClone(seedMunicipalities),
     stakeholders: Array.isArray(database.stakeholders) ? database.stakeholders.filter(isStakeholder).map(normalizeStakeholder) : structuredClone(seedStakeholders),
-    plannedMissions: Array.isArray(database.plannedMissions) ? database.plannedMissions.filter(isPlannedMission) : structuredClone(seedPlannedMissions),
+    plannedMissions: Array.isArray(database.plannedMissions) ? database.plannedMissions.filter(isPlannedMission).map(normalizePlannedMission) : structuredClone(seedPlannedMissions).map(normalizePlannedMission),
   };
 }
 
@@ -127,6 +128,11 @@ function isStakeholder(value: unknown): value is StakeholderRecord {
 function isPlannedMission(value: unknown): value is PlannedMissionRecord {
   const record = value as PlannedMissionRecord;
   return Boolean(record?.id && record.municipalityId && record.areaId && record.title && record.params);
+}
+
+function normalizePlannedMission(record: PlannedMissionRecord): PlannedMissionRecord {
+  if (!record.missionPath) return record;
+  return { ...record, missionPath: createMissionPath(record.missionPath.name, missionPathWaypointsFlat(record.missionPath)) };
 }
 
 function normalizeMissionRecord(record: MissionRecord, areas: DeploymentArea[]): MissionRecord {

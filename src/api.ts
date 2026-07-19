@@ -1,6 +1,32 @@
 import { DeploymentArea, MissionRecord, MunicipalityRecord, PlannedMissionRecord, SavedPathRecord, SavedScenarioRecord, StakeholderRecord } from "./domain";
 
 const apiBase = "/api";
+const adminTokenStorageKey = "athene.adminAccessToken.v1";
+
+export function hasAdminAccessToken(): boolean {
+  return Boolean(window.sessionStorage.getItem(adminTokenStorageKey));
+}
+
+export function clearAdminAccessToken(): void {
+  window.sessionStorage.removeItem(adminTokenStorageKey);
+}
+
+export async function authenticateAdminToken(token: string): Promise<boolean> {
+  const response = await fetch(`${apiBase}/auth/session`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!response.ok) return false;
+  const session = await response.json() as { role?: string };
+  if (session.role !== "admin") return false;
+  window.sessionStorage.setItem(adminTokenStorageKey, token);
+  return true;
+}
+
+export async function verifyStoredAdminAccess(): Promise<boolean> {
+  const token = window.sessionStorage.getItem(adminTokenStorageKey);
+  if (!token) return false;
+  const response = await fetch(`${apiBase}/auth/session`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!response.ok) return false;
+  return ((await response.json()) as { role?: string }).role === "admin";
+}
 
 export async function fetchSavedPaths(): Promise<SavedPathRecord[]> {
   return requestJson<SavedPathRecord[]>("/paths");
@@ -82,11 +108,17 @@ export async function savePlannedMission(record: PlannedMissionRecord): Promise<
   return requestJson<PlannedMissionRecord>(`/planned-missions/${encodeURIComponent(record.id)}`, { method: "PUT", body: JSON.stringify(record) });
 }
 
+export async function deletePlannedMission(missionId: string): Promise<void> {
+  await requestEmpty(`/planned-missions/${encodeURIComponent(missionId)}`, { method: "DELETE" });
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = window.sessionStorage.getItem(adminTokenStorageKey);
   const response = await fetch(`${apiBase}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...init?.headers,
     },
   });
@@ -95,6 +127,10 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function requestEmpty(path: string, init?: RequestInit): Promise<void> {
-  const response = await fetch(`${apiBase}${path}`, init);
+  const token = window.sessionStorage.getItem(adminTokenStorageKey);
+  const response = await fetch(`${apiBase}${path}`, {
+    ...init,
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init?.headers },
+  });
   if (!response.ok) throw new Error(`API ${path} failed: ${response.status}`);
 }

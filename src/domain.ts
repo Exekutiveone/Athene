@@ -32,6 +32,8 @@ export interface Waypoint extends Coordinate {
   sequence: number;
   minute: number;
   speedKmh: number;
+  /** Starts a new, disconnected route segment. No travel or interpolation crosses this boundary. */
+  breakBefore?: boolean;
 }
 
 export interface ForestPath {
@@ -40,6 +42,14 @@ export interface ForestPath {
   waypoints: Waypoint[];
   driveability: "easy" | "moderate" | "limited";
   widthMeters: number;
+}
+
+export interface MissionPath {
+  name: string;
+  /** Canonical geometry. Disconnected route parts remain separate arrays. */
+  segments?: Waypoint[][];
+  /** Legacy flattened representation retained while older stored records are migrated. */
+  waypoints: Waypoint[];
 }
 
 export interface Scenario {
@@ -106,6 +116,7 @@ export interface Observation extends Coordinate {
   confidence: number;
   source: string;
   generatorVersion: string;
+  routeBreakBefore?: boolean;
 }
 
 export interface DetectionEvent {
@@ -240,7 +251,20 @@ export interface PlannedMissionRecord {
   scenarioName: string;
   pathName: string;
   /** undefined = legacy/generated route, null = explicitly no route. */
-  missionPath?: { name: string; waypoints: Waypoint[] } | null;
+  missionPath?: MissionPath | null;
+  /** Keeps uploaded/real mission planning visibly separate from generated mock scenarios. */
+  dataMode?: "real" | "mock";
+  /** Timestamp and aggregate derived from this mission's saved route observations. */
+  routeSummary?: {
+    averageDryStress: number;
+    averageConfidence: number;
+    observationCount: number;
+    calculatedAt: string;
+    dataOrigin: "real" | "synthetic";
+    dataStatus: "measured" | "derived";
+    source: string;
+    modelVersion: string | null;
+  };
   params: ScenarioParams;
   createdAt: string;
   updatedAt: string;

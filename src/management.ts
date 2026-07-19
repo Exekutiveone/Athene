@@ -6,7 +6,9 @@ import {
   PlannedMissionRecord,
   ScenarioParams,
   StakeholderRecord,
+  Waypoint,
 } from "./domain.js";
+import { missionPathSegments, missionPathWaypointsFlat } from "./routeGeometry.js";
 
 const now = "2026-07-16T08:00:00.000Z";
 
@@ -144,7 +146,11 @@ export function normalizeDeploymentArea(value: Partial<DeploymentArea> & { id: s
 }
 
 export function hasDefinedMissionPath(mission: Pick<PlannedMissionRecord, "missionPath">): boolean {
-  return mission.missionPath === undefined || Boolean(mission.missionPath && mission.missionPath.waypoints.length >= 2);
+  return missionPathSegments(mission.missionPath).some((segment) => segment.length >= 2);
+}
+
+export function missionPathWaypoints(mission: Pick<PlannedMissionRecord, "missionPath">): Waypoint[] {
+  return missionPathWaypointsFlat(mission.missionPath);
 }
 
 function municipality(id: string, name: string, type: MunicipalityRecord["type"], region: string, population: number, lat: number, lng: number, administrativeScopeId: string): MunicipalityRecord {

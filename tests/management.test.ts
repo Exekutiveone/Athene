@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MissionRecord } from "../src/domain.js";
-import { generateMission, generateScenario } from "../src/generator.js";
+import { generateMission, generateObservations, generateScenario } from "../src/generator.js";
 import {
   aggregateAreaRecords,
   calculatePolygonHectares,
   calculateRouteCoverageShare,
   hasDefinedMissionPath,
+  missionPathWaypoints,
   normalizeDeploymentArea,
   resolveManagementSelection,
   seedDeploymentAreas,
@@ -115,11 +116,29 @@ test("legacy and pending area boundaries normalize without changing the area ide
   assert.equal(drawn.boundaryStatus, "defined");
 });
 
-test("new missions require a usable explicit path while legacy missions remain compatible", () => {
-  assert.equal(hasDefinedMissionPath({}), true);
+test("missions require a usable explicitly assigned path", () => {
+  assert.equal(hasDefinedMissionPath({}), false);
   assert.equal(hasDefinedMissionPath({ missionPath: null }), false);
   assert.equal(hasDefinedMissionPath({ missionPath: { name: "Zu kurz", waypoints: [] } }), false);
   assert.equal(hasDefinedMissionPath({ missionPath: { name: "Route", waypoints: [{ id: "a", sequence: 1, minute: 0, speedKmh: 2, lat: 48, lng: 9 }, { id: "b", sequence: 2, minute: 1, speedKmh: 2, lat: 48.01, lng: 9.01 }] } }), true);
+});
+
+test("mission route loading never falls back to another or generated path", () => {
+  const routeA = [{ id: "a-1", sequence: 1, minute: 0, speedKmh: 2, lat: 48.1, lng: 9.1 }, { id: "a-2", sequence: 2, minute: 1, speedKmh: 2, lat: 48.2, lng: 9.2 }];
+  const routeB = [{ id: "b-1", sequence: 1, minute: 0, speedKmh: 2, lat: 49.1, lng: 10.1 }, { id: "b-2", sequence: 2, minute: 1, speedKmh: 2, lat: 49.2, lng: 10.2 }];
+  assert.deepEqual(missionPathWaypoints({ missionPath: null }), []);
+  assert.deepEqual(missionPathWaypoints({ missionPath: { name: "Route A", waypoints: routeA } }), routeA);
+  assert.deepEqual(missionPathWaypoints({ missionPath: { name: "Route B", waypoints: routeB } }), routeB);
+});
+
+test("sensor observations can be generated for manual and detected forest routes", () => {
+  const scenario = generateScenario("route-source-test");
+  const manualRoute = { ...scenario.forestPath, waypoints: scenario.forestPath.waypoints.slice(0, 3) };
+  const detectedRoute = { ...scenario.forestPath, name: "OSM Waldweg", waypoints: scenario.forestPath.waypoints.slice(3, 7) };
+  const manualScenario = { ...scenario, forestPath: manualRoute };
+  const detectedScenario = { ...scenario, forestPath: detectedRoute };
+  assert.equal(generateObservations(generateMission(manualScenario), manualScenario).length, manualRoute.waypoints.length);
+  assert.equal(generateObservations(generateMission(detectedScenario), detectedScenario).length, detectedRoute.waypoints.length);
 });
 
 test("unknown legacy scopes remain unassigned instead of leaking into Esslingen", () => {

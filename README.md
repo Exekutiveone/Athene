@@ -24,6 +24,13 @@ Der MVP soll Gebiet, Wege, Szenario, simulierte Mission, Kartenlayer, Confidence
 
 ## Lokale Entwicklung
 
+In der lokalen Entwicklung lautet der Standard-Admin-Schlüssel `admin`. Eine
+lokale `.env` kann diesen Wert über `ATHENE_ADMIN_TOKEN` überschreiben und wird
+nicht versioniert. In Produktion ist ein ausdrücklich gesetzter, langer und
+zufälliger Schlüssel erforderlich. Beim Wechsel in die Admin-Rolle fragt das
+Portal diesen Schlüssel ab; Customers benötigen keinen Schlüssel und bleiben
+serverseitig schreibgeschützt.
+
 ```bash
 npm install
 npm run dev
@@ -35,6 +42,18 @@ npm run dev
 - Backend API: `http://127.0.0.1:8787/api/health`
 
 Persistente lokale Daten liegen in `.data/athene-db.json` und werden nicht versioniert.
+
+## Qualitätsprüfung
+
+```bash
+npm run build
+npm test
+npm run test:e2e
+```
+
+Die Browser-Tests starten Frontend und API isoliert auf den Ports 4173 und 8788.
+Der benötigte Chromium-Browser wird einmalig mit `npx playwright install chromium`
+installiert.
 
 ## Backend API
 
