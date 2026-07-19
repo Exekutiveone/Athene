@@ -56,7 +56,7 @@ import {
   layerDefinitions,
 } from "./generator";
 import { CopernicusAnalysis, generateCopernicusDemoAnalysis, getCopernicusConfig, getCopernicusLayerCells } from "./copernicus";
-import { fetchOsmForestPaths, OsmForestPath } from "./osmForestPaths";
+import { fetchOsmForestPaths, OsmForestPath, OsmLoadProgress } from "./osmForestPaths";
 import {
   deleteMissionRecord,
   deletePlannedMission,
@@ -72,6 +72,7 @@ import {
   saveForestArea,
   saveMunicipality,
   saveMissionRecord,
+  saveMissionBundle,
   savePlannedMission,
   savePathRecord,
   saveScenarioRecord,
@@ -446,12 +447,16 @@ export function App() {
   const [geoOsmForestPaths, setGeoOsmForestPaths] = useState<OsmForestPath[]>([]);
   const [geoOsmPathState, setGeoOsmPathState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [geoOsmPathProgress, setGeoOsmPathProgress] = useState(0);
+  const [geoOsmPathStatus, setGeoOsmPathStatus] = useState<OsmLoadProgress | null>(null);
   const [geoOsmReloadKey, setGeoOsmReloadKey] = useState(0);
   const [geoSelectedOsmPathIds, setGeoSelectedOsmPathIds] = useState<number[]>([]);
   const [geoOsmBaseRoute, setGeoOsmBaseRoute] = useState<Waypoint[]>([]);
   const [geoHoveredOsmPathId, setGeoHoveredOsmPathId] = useState<number | null>(null);
   const [forestDataDisplayMode, setForestDataDisplayMode] = useState<"corridor" | "surface" | "average">("corridor");
-  const [missionSaveState, setMissionSaveState] = useState<"idle" | "saving" | "saved" | "queued">("idle");
+  const [heatmapInterpolationMode, setHeatmapInterpolationMode] = useState<"full" | "confidence">("full");
+  const [heatmapMaxDistanceMeters, setHeatmapMaxDistanceMeters] = useState(30);
+  const [heatmapMinConfidence, setHeatmapMinConfidence] = useState(0.45);
+  const [missionSaveState, setMissionSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const geoOsmPathRenderer = useMemo(() => createLeafletCanvas({ padding: 0.5, tolerance: 12 }), []);
 
   useEffect(() => {
@@ -469,11 +474,11 @@ export function App() {
         ...municipality,
         stakeholders: managedStakeholders.filter((stakeholder) => stakeholder.municipalityId === municipality.id && stakeholder.status !== "archived"),
         areas: deploymentAreas.filter((area) => area.municipalityId === municipality.id && area.status !== "archiviert"),
-        missionIds: plannedMissions.filter((missionItem) => missionItem.municipalityId === municipality.id).map((missionItem) => missionItem.id),
+        missionIds: plannedMissions.filter((missionItem) => missionItem.municipalityId === municipality.id && missionItem.status !== "archiviert").map((missionItem) => missionItem.id),
       }))
       .sort((a, b) => (orderIndex.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (orderIndex.get(b.id) ?? Number.MAX_SAFE_INTEGER));
   }, [deploymentAreas, managedMunicipalities, managedStakeholders, municipalityOrder, plannedMissions]);
-  const portalMissions = useMemo<CustomerMissionTemplate[]>(() => plannedMissions.map((missionItem) => {
+  const portalMissions = useMemo<CustomerMissionTemplate[]>(() => plannedMissions.filter((missionItem) => missionItem.status !== "archiviert").map((missionItem) => {
     const areaItem = deploymentAreas.find((area) => area.id === missionItem.areaId);
     const owner = managedStakeholders.find((stakeholder) => stakeholder.municipalityId === missionItem.municipalityId);
     return { ...missionItem, areaName: areaItem?.name ?? "Unbekanntes Einsatzgebiet", customer: owner?.name ?? "Kommunale Verwaltung" };
@@ -524,7 +529,18 @@ export function App() {
   const activeMeasurementCorridorHectares = Math.max(0, round((activeRouteLengthMeters * measurementCorridorWidthMeters) / 10_000, 2));
   const activeScenario = useMemo(() => ({ ...scenario, forestArea: activeForestArea, forestPath: activeForestPath }), [activeForestArea, activeForestPath, scenario]);
   const mission = useMemo(() => generateMission(activeScenario, { areaId: selectedArea?.id, municipalityId: selectedMunicipality?.id }), [activeScenario, selectedArea?.id, selectedMunicipality?.id]);
-  const observations = useMemo(() => generateObservations(mission, activeScenario), [mission, activeScenario]);
+  const generatedObservations = useMemo(() => generateObservations(mission, activeScenario), [mission, activeScenario]);
+  const persistedMissionResult = useMemo(() => selectedCustomerMission
+    ? missionRecords
+      .filter((record) => record.missionId === selectedCustomerMission.id && record.observations?.length)
+      .sort((a, b) => Date.parse(b.updatedAt ?? b.createdAt) - Date.parse(a.updatedAt ?? a.createdAt))[0] ?? null
+    : null, [missionRecords, selectedCustomerMission]);
+  const persistedResultMatchesDraft = useMemo(() => Boolean(persistedMissionResult?.scenarioParams && persistedMissionResult.missionPath
+    && JSON.stringify(persistedMissionResult.scenarioParams) === JSON.stringify(params)
+    && routeCoordinatesEqual(missionPathWaypointsFlat(persistedMissionResult.missionPath), draftWaypoints)), [draftWaypoints, params, persistedMissionResult]);
+  const observations = useMemo(() => persistedResultMatchesDraft && persistedMissionResult?.observations?.length
+    ? persistedMissionResult.observations
+    : generatedObservations, [generatedObservations, persistedMissionResult, persistedResultMatchesDraft]);
   const speciesObservations = useMemo(() => generateSpeciesObservations(observations), [observations]);
   const biodiversityMetrics = useMemo(() => calculateBiodiversityMetrics(speciesObservations), [speciesObservations]);
   const activeLayer = getLayerDefinition(activeLayerId);
@@ -539,7 +555,8 @@ export function App() {
   const coverage = corridorCoverage;
   const heatmapRequest = useMemo(() => ({ observations, layer: activeLayer, polygon: activeScenario.forestArea.polygon }), [activeLayer, activeScenario.forestArea.polygon, observations]);
   const debouncedHeatmapRequest = useDebouncedValue(heatmapRequest, 1_000);
-  const { image: interpolatedForestHeatmap, loading: isHeatmapWorkerLoading } = useForestHeatmap(debouncedHeatmapRequest.observations, debouncedHeatmapRequest.layer, debouncedHeatmapRequest.polygon, forestDataDisplayMode === "surface" && !isCopernicusLayer);
+  const heatmapDisplayOptions = useMemo(() => ({ mode: heatmapInterpolationMode, maxDistanceMeters: heatmapMaxDistanceMeters, minConfidence: heatmapMinConfidence }), [heatmapInterpolationMode, heatmapMaxDistanceMeters, heatmapMinConfidence]);
+  const { image: interpolatedForestHeatmap, loading: isHeatmapWorkerLoading } = useForestHeatmap(debouncedHeatmapRequest.observations, debouncedHeatmapRequest.layer, debouncedHeatmapRequest.polygon, forestDataDisplayMode === "surface" && !isCopernicusLayer, heatmapDisplayOptions);
   const isHeatmapUpdatePending = forestDataDisplayMode === "surface" && (debouncedHeatmapRequest !== heatmapRequest || isHeatmapWorkerLoading);
   const forestAverageValue = useMemo(() => {
     const values = corridorCoverage.map((cell) => cell.value).filter((value): value is number => value !== null);
@@ -629,17 +646,18 @@ export function App() {
     const controller = new AbortController();
     setGeoOsmPathState("loading");
     setGeoOsmPathProgress(5);
-    fetchOsmForestPaths(selectedArea, controller.signal, setGeoOsmPathProgress)
+    fetchOsmForestPaths(selectedArea, controller.signal, (progress) => { setGeoOsmPathProgress(progress.percent); setGeoOsmPathStatus(progress); })
       .then((paths) => {
         setGeoOsmForestPaths(paths);
         setGeoOsmPathState("ready");
         setGeoOsmPathProgress(100);
       })
-      .catch(() => {
+      .catch((error) => {
         if (controller.signal.aborted) return;
         setGeoOsmForestPaths([]);
         setGeoOsmPathState("error");
         setGeoOsmPathProgress(0);
+        setGeoOsmPathStatus({ percent: 0, stage: "error", message: errorMessage(error), count: 0 });
       });
     return () => controller.abort();
   }, [appView, geoOsmReloadKey, selectedArea]);
@@ -951,15 +969,17 @@ export function App() {
     setMissionSaveState("saving");
     setPlannedMissions((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
     try {
-      const saved = await savePlannedMission(updated);
+      const bundle = await saveMissionBundle(updated, createCurrentMissionRecord());
+      const saved = bundle.plannedMission;
+      const savedResult = bundle.missionRecord;
       setPlannedMissions((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      setMissionRecords((current) => [savedResult, ...current.filter((item) => item.id !== savedResult.id)]);
       setPendingSyncCount(acknowledgeManagementMutation("mission", saved.id).length);
       setMissionSaveState("saved");
-      setManagementFeedback({ tone: "success", message: `${saved.title} wurde vollständig gespeichert.` });
-    } catch {
-      setPendingSyncCount(enqueueManagementMutation("mission", updated).length);
-      setMissionSaveState("queued");
-      setManagementFeedback({ tone: "error", message: `${updated.title} wurde lokal gesichert und zur erneuten Synchronisierung vorgemerkt.` });
+      setManagementFeedback({ tone: "success", message: `${saved.title} wurde mit ${savedResult.observations?.length ?? 0} Observationen und ${savedResult.detections?.length ?? 0} Detektionen vollständig gespeichert.` });
+    } catch (error) {
+      setMissionSaveState("error");
+      setManagementFeedback({ tone: "error", message: `${updated.title} konnte nicht vollständig gespeichert werden. ${errorMessage(error)}` });
     }
   };
 
@@ -1018,14 +1038,34 @@ export function App() {
   const removePlannedMission = async (missionId: string) => {
     const missionToDelete = plannedMissions.find((missionItem) => missionItem.id === missionId);
     if (!missionToDelete) return;
+    const deletedResults = missionRecords.filter((record) => record.missionId === missionId);
     setPlannedMissions((current) => current.filter((missionItem) => missionItem.id !== missionId));
+    setMissionRecords((current) => current.filter((record) => record.missionId !== missionId));
     if (selectedCustomerMissionId === missionId) selectManagementContext({ areaId: missionToDelete.areaId, missionId: null });
     try {
-      await deletePlannedMission(missionId);
-      setManagementFeedback({ tone: "success", message: `${missionToDelete.title} wurde gelöscht.` });
+      await deletePlannedMission(missionId, true);
+      setManagementFeedback({ tone: "success", message: `${missionToDelete.title} und alle zugehörigen Ergebnisse wurden dauerhaft gelöscht.` });
     } catch (error) {
       setPlannedMissions((current) => [missionToDelete, ...current.filter((missionItem) => missionItem.id !== missionId)]);
+      setMissionRecords((current) => [...deletedResults, ...current.filter((record) => record.missionId !== missionId)]);
       setManagementFeedback({ tone: "error", message: `${missionToDelete.title} konnte nicht gelöscht werden. ${errorMessage(error)}` });
+    }
+  };
+
+  const archivePlannedMission = async (missionId: string) => {
+    const existing = plannedMissions.find((missionItem) => missionItem.id === missionId);
+    if (!existing) return;
+    const timestamp = new Date().toISOString();
+    const archived: PlannedMissionRecord = { ...existing, status: "archiviert", archivedAt: timestamp, updatedAt: timestamp };
+    setPlannedMissions((current) => [archived, ...current.filter((missionItem) => missionItem.id !== missionId)]);
+    if (selectedCustomerMissionId === missionId) selectManagementContext({ areaId: existing.areaId, missionId: null });
+    try {
+      const saved = await savePlannedMission(archived);
+      setPlannedMissions((current) => [saved, ...current.filter((missionItem) => missionItem.id !== missionId)]);
+      setManagementFeedback({ tone: "success", message: `${existing.title} wurde archiviert. Gespeicherte Ergebnisse bleiben erhalten.` });
+    } catch (error) {
+      setPlannedMissions((current) => [existing, ...current.filter((missionItem) => missionItem.id !== missionId)]);
+      setManagementFeedback({ tone: "error", message: `${existing.title} konnte nicht archiviert werden. ${errorMessage(error)}` });
     }
   };
 
@@ -1214,7 +1254,7 @@ export function App() {
 
   const createCurrentMissionRecord = () =>
     createMissionRecord({
-      missionId: mission.id,
+      missionId: selectedCustomerMission?.id ?? mission.id,
       areaId: mission.areaId,
       municipalityId: mission.municipalityId,
       scenarioName,
@@ -1228,6 +1268,10 @@ export function App() {
       overview: missionOverview,
       copernicus: copernicusAnalysis,
       biodiversityMetrics,
+      observations,
+      missionPath: createMissionPath(activeForestPath.name, buildWaypoints(activeForestPath.waypoints)),
+      scenarioParams: params,
+      existingCreatedAt: missionRecords.find((record) => record.missionId === (selectedCustomerMission?.id ?? mission.id))?.createdAt,
     });
 
   const exportCurrentMissionRecord = () => {
@@ -1334,6 +1378,7 @@ export function App() {
         canManage={isAdmin}
         municipalities={portalMunicipalities}
         missions={portalMissions}
+        missionRecords={missionRecords}
         forestAreas={deploymentAreas}
         selectedAreaId={selectedAreaId ?? ""}
         focusAreaId={mapFocusAreaId}
@@ -1370,6 +1415,7 @@ export function App() {
           openGeoMissionFromPortal(mission, false);
         }}
         onDeleteMission={removePlannedMission}
+        onArchiveMission={archivePlannedMission}
         onArchiveArea={archiveArea}
         feedback={managementFeedback}
         onBackToPortal={() => setAppView("portal")}
@@ -1838,15 +1884,28 @@ export function App() {
               </button>
             ))}
           </div>
-          <label className="mapOverlay forestAverageMapToggle">
-            Datendarstellung
-            <select value={forestDataDisplayMode} onChange={(event) => setForestDataDisplayMode(event.target.value as "corridor" | "surface" | "average")} disabled={!hasActiveMissionPath}>
-              <option value="corridor">Nur gemessener Korridor</option>
-              <option value="surface">Gesamter Wald · stetige Heatmap</option>
-              <option value="average">Gesamter Wald · Routendurchschnitt</option>
-            </select>
+          <div className="mapOverlay forestAverageMapToggle">
+            <label>Datendarstellung
+              <select value={forestDataDisplayMode} onChange={(event) => setForestDataDisplayMode(event.target.value as "corridor" | "surface" | "average")} disabled={!hasActiveMissionPath}>
+                <option value="corridor">Nur gemessener Korridor</option>
+                <option value="surface">Gesamter Wald · stetige Heatmap</option>
+                <option value="average">Gesamter Wald · Routendurchschnitt</option>
+              </select>
+            </label>
+            {forestDataDisplayMode === "surface" && <>
+              <label>Interpolationsmodus
+                <select value={heatmapInterpolationMode} onChange={(event) => setHeatmapInterpolationMode(event.target.value as "full" | "confidence")}>
+                  <option value="full">Vollständig · Confidence-Abblendung</option>
+                  <option value="confidence">Confidence-begrenzt</option>
+                </select>
+              </label>
+              {heatmapInterpolationMode === "confidence" && <>
+                <label>Max. Distanz: {heatmapMaxDistanceMeters} m<input type="range" min={10} max={100} step={5} value={heatmapMaxDistanceMeters} onChange={(event) => setHeatmapMaxDistanceMeters(Number(event.target.value))} /></label>
+                <label>Min. Confidence: {Math.round(heatmapMinConfidence * 100)} %<input type="range" min={0} max={1} step={0.05} value={heatmapMinConfidence} onChange={(event) => setHeatmapMinConfidence(Number(event.target.value))} /></label>
+              </>}
+            </>}
             <small>{forestDataDisplayMode === "surface" ? isHeatmapUpdatePending ? "Werte geändert · Heatmap wird nach 1 Sekunde Ruhe aktualisiert …" : "IDW-Interpolation aus den sechs nächsten Messpunkten; modelliert außerhalb der Route." : forestDataDisplayMode === "average" ? "Ein abgeleiteter Mittelwert für das ganze Polygon." : "Mess- und schmale Interpolationsfläche entlang der Route."}</small>
-          </label>
+          </div>
 
           <div className="mapOverlay topLeft">
             <strong>{activeScenario.forestArea.name}</strong>
@@ -1857,7 +1916,7 @@ export function App() {
               {hasActiveMissionPath ? `${activeForestPath.name} · ${activeForestPath.waypoints.length} Wegpunkte · ${formatRouteLength(activeRouteLengthMeters)}` : "Noch kein Missionspfad definiert"}
             </span>
             <span>
-              {geoOsmPathState === "loading" ? `Erkannte Waldwege werden geladen … ${geoOsmPathProgress}%` : geoOsmPathState === "error" ? "OSM-Wegenetz derzeit nicht verfügbar" : `${geoOsmForestPaths.length} erkannte OSM-Waldwege · geladen`}
+              {geoOsmPathState === "loading" ? `${geoOsmPathStatus?.message ?? "Erkannte Waldwege werden geladen …"} ${geoOsmPathProgress}%` : geoOsmPathState === "error" ? geoOsmPathStatus?.message ?? "OSM-Wegenetz derzeit nicht verfügbar" : `${geoOsmForestPaths.length} erkannte OSM-Waldwege · ${formatOsmSource(geoOsmPathStatus?.source)}`}
             </span>
             {geoOsmPathState === "loading" && <progress className="geoPathLoadProgress" max={100} value={geoOsmPathProgress}>{geoOsmPathProgress}%</progress>}
             {geoOsmPathState === "error" && <button className="textButton" type="button" onClick={() => setGeoOsmReloadKey((value) => value + 1)}>Wegenetz erneut laden</button>}
@@ -1887,7 +1946,7 @@ export function App() {
 
           {isAdmin && selectedCustomerMission && <button className={`mapOverlay missionSaveFloatingButton ${missionSaveState}`} onClick={() => void saveCurrentMission()} disabled={missionSaveState === "saving"} type="button">
             <Save size={16} />
-            {missionSaveState === "saving" ? "Mission wird gespeichert …" : missionSaveState === "saved" ? "Mission gespeichert" : missionSaveState === "queued" ? "Lokal gesichert · Sync vorgemerkt" : "Mission speichern"}
+            {missionSaveState === "saving" ? "Mission wird gespeichert …" : missionSaveState === "saved" ? "Mission gespeichert" : missionSaveState === "error" ? "Speichern fehlgeschlagen · erneut versuchen" : "Mission speichern"}
           </button>}
 
           <button className="mapOverlay overviewOpenButton" onClick={() => setIsMissionOverviewOpen(true)} type="button">
@@ -1904,7 +1963,7 @@ export function App() {
             </div>
             <div className="legendUnknown">
               <span className="unknownSwatch" />
-              <span>Unbekannt / außerhalb Messkorridor</span>
+              <span>{forestDataDisplayMode === "surface" && heatmapInterpolationMode === "full" ? "Modelliert · Transparenz zeigt sinkende Confidence" : "Unbekannt / außerhalb Confidence-Grenze"}</span>
             </div>
           </div>
         </div>
@@ -2435,10 +2494,13 @@ function AdminMapViewport({ bounds }: { bounds: [[number, number], [number, numb
   return null;
 }
 
-function ForestAreaViewport({ bounds }: { bounds: [[number, number], [number, number]] }) {
+function ForestAreaViewport({ bounds, focusKey }: { bounds: [[number, number], [number, number]]; focusKey: string }) {
   const map = useMap();
+  const boundsRef = useRef(bounds);
+  boundsRef.current = bounds;
 
   useEffect(() => {
+    const bounds = boundsRef.current;
     const [[south, west], [north, east]] = bounds;
     const latPadding = Math.max((north - south) * 0.35, 0.0012);
     const lngPadding = Math.max((east - west) * 0.35, 0.0012);
@@ -2449,7 +2511,7 @@ function ForestAreaViewport({ bounds }: { bounds: [[number, number], [number, nu
     map.setMaxBounds(paddedBounds);
     map.fitBounds(bounds, { padding: [56, 56], animate: false });
     map.setMinZoom(Math.max(12, map.getZoom() - 1));
-  }, [bounds, map]);
+  }, [focusKey, map]);
 
   return null;
 }
@@ -2474,10 +2536,19 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debouncedValue;
 }
 
+function formatOsmSource(source: OsmLoadProgress["source"] | undefined): string {
+  if (source === "memory-cache") return "RAM-Cache";
+  if (source === "browser-cache") return "Browser-Cache";
+  if (source === "athene-proxy") return "Athene-Proxy";
+  if (source === "external-fallback") return "OSM-Fallback";
+  return "geladen";
+}
+
 function BadenWuerttembergMapPage({
   canManage,
   municipalities,
   missions,
+  missionRecords,
   forestAreas,
   selectedAreaId,
   focusAreaId,
@@ -2496,6 +2567,7 @@ function BadenWuerttembergMapPage({
   onOpenMockMission,
   onOpenMission,
   onDeleteMission,
+  onArchiveMission,
   onArchiveArea,
   feedback,
   onBackToPortal,
@@ -2504,6 +2576,7 @@ function BadenWuerttembergMapPage({
   canManage: boolean;
   municipalities: Municipality[];
   missions: CustomerMissionTemplate[];
+  missionRecords: MissionRecord[];
   forestAreas: DeploymentArea[];
   selectedAreaId: string;
   focusAreaId: string | null;
@@ -2522,6 +2595,7 @@ function BadenWuerttembergMapPage({
   onOpenMockMission: (areaId: string, route: Coordinate[]) => void;
   onOpenMission: (mission: CustomerMissionTemplate) => void;
   onDeleteMission: (missionId: string) => Promise<void>;
+  onArchiveMission: (missionId: string) => Promise<void>;
   onArchiveArea: (areaId: string) => Promise<void>;
   feedback: { tone: "success" | "error" | "loading"; message: string } | null;
   onBackToPortal: () => void;
@@ -2552,6 +2626,9 @@ function BadenWuerttembergMapPage({
   const [detailAreaId, setDetailAreaId] = useState<string | null>(initialDetailAreaId);
   const [detailMissionId, setDetailMissionId] = useState<string | null>(null);
   const [detailHeatmapLayerId, setDetailHeatmapLayerId] = useState<LayerId>("dryStress");
+  const [detailHeatmapMode, setDetailHeatmapMode] = useState<"full" | "confidence">("full");
+  const [detailHeatmapMaxDistance, setDetailHeatmapMaxDistance] = useState(30);
+  const [detailHeatmapMinConfidence, setDetailHeatmapMinConfidence] = useState(0.45);
   const [timelineFrom, setTimelineFrom] = useState("");
   const [timelineTo, setTimelineTo] = useState("");
   const [timelineIndex, setTimelineIndex] = useState(0);
@@ -2567,6 +2644,7 @@ function BadenWuerttembergMapPage({
   const [osmForestPaths, setOsmForestPaths] = useState<OsmForestPath[]>([]);
   const [osmPathState, setOsmPathState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [osmPathProgress, setOsmPathProgress] = useState(0);
+  const [osmPathStatus, setOsmPathStatus] = useState<OsmLoadProgress | null>(null);
   const [osmReloadKey, setOsmReloadKey] = useState(0);
   const [hoveredOsmPathId, setHoveredOsmPathId] = useState<number | null>(null);
   const detailOsmPathRenderer = useMemo(() => createLeafletCanvas({ padding: 0.5, tolerance: 12 }), []);
@@ -2631,16 +2709,21 @@ function BadenWuerttembergMapPage({
   );
   const detailAreaMissions = useMemo(() => detailArea ? missions.filter((mission) => mission.areaId === detailArea.id) : [], [detailArea, missions]);
   const detailMission = detailAreaMissions.find((mission) => mission.id === detailMissionId) ?? null;
+  const detailPersistedResult = useMemo(() => detailMission ? missionRecords
+    .filter((record) => record.missionId === detailMission.id && record.observations?.length)
+    .sort((a, b) => Date.parse(b.updatedAt ?? b.createdAt) - Date.parse(a.updatedAt ?? a.createdAt))[0] ?? null : null, [detailMission, missionRecords]);
   const detailMissionObservations = useMemo(() => {
+    if (detailPersistedResult?.observations?.length) return detailPersistedResult.observations;
     if (!detailArea || !detailMission?.missionPath || missionPathWaypointsFlat(detailMission.missionPath).length < 2) return [];
     const generated = generateScenario(detailMission.seed, detailMission.params);
     const forestArea: ForestArea = { id: detailArea.id, name: detailArea.name, polygon: detailArea.polygon, hectares: detailArea.hectares, authority: detailArea.scopeName };
     const forestPath = buildForestPath(missionPathWaypointsFlat(detailMission.missionPath), detailMission.missionPath.name);
     const missionScenario = { ...generated, forestArea, forestPath };
     return generateObservations(generateMission(missionScenario, { areaId: detailArea.id, municipalityId: detailMission.municipalityId }), missionScenario);
-  }, [detailArea, detailMission]);
+  }, [detailArea, detailMission, detailPersistedResult]);
   const detailHeatmapLayer = getLayerDefinition(detailHeatmapLayerId);
-  const { image: detailMissionHeatmap } = useForestHeatmap(detailMissionObservations, detailHeatmapLayer, detailArea?.polygon ?? [], Boolean(detailArea));
+  const detailHeatmapOptions = useMemo(() => ({ mode: detailHeatmapMode, maxDistanceMeters: detailHeatmapMaxDistance, minConfidence: detailHeatmapMinConfidence }), [detailHeatmapMaxDistance, detailHeatmapMinConfidence, detailHeatmapMode]);
+  const { image: detailMissionHeatmap } = useForestHeatmap(detailMissionObservations, detailHeatmapLayer, detailArea?.polygon ?? [], Boolean(detailArea && detailMission), detailHeatmapOptions);
   const chronologicalDetailMissions = useMemo(() => detailAreaMissions
     .filter((mission) => missionPathWaypointsFlat(mission.missionPath).length >= 2)
     .filter((mission) => !timelineFrom || mission.requestedAt.slice(0, 10) >= timelineFrom)
@@ -2706,17 +2789,18 @@ function BadenWuerttembergMapPage({
     const controller = new AbortController();
     setOsmPathState("loading");
     setOsmPathProgress(5);
-    fetchOsmForestPaths(detailArea, controller.signal, setOsmPathProgress)
+    fetchOsmForestPaths(detailArea, controller.signal, (progress) => { setOsmPathProgress(progress.percent); setOsmPathStatus(progress); })
       .then((paths) => {
         setOsmForestPaths(paths);
         setOsmPathState("ready");
         setOsmPathProgress(100);
       })
-      .catch(() => {
+      .catch((error) => {
         if (controller.signal.aborted) return;
         setOsmForestPaths([]);
         setOsmPathState("error");
         setOsmPathProgress(0);
+        setOsmPathStatus({ percent: 0, stage: "error", message: errorMessage(error), count: 0 });
       });
     return () => controller.abort();
   }, [detailArea, detailAreaBounds, osmReloadKey]);
@@ -3006,7 +3090,7 @@ function BadenWuerttembergMapPage({
               preferCanvas
               className="forestDetailMap"
             >
-              <ForestAreaViewport bounds={detailAreaBounds} />
+              <ForestAreaViewport bounds={detailAreaBounds} focusKey={detailArea.id} />
               <ForestDrawingCapture enabled={canManage && isMissionPlannerOpen} onPick={(coordinate) => {
                 const geometry = { coordinates: [detailArea.polygon.map((point) => [point.lng, point.lat])] };
                 if (!geometryContainsCoordinate(geometry, coordinate)) {
@@ -3068,7 +3152,18 @@ function BadenWuerttembergMapPage({
               <select value={detailHeatmapLayerId} onChange={(event) => setDetailHeatmapLayerId(event.target.value as LayerId)} disabled={!detailMission.missionPath}>
                 {layerDefinitions.filter((layer) => !copernicusLayerIds.includes(layer.id)).map((layer) => <option key={layer.id} value={layer.id}>{layer.name}</option>)}
               </select>
-              <small>{detailMission.missionPath ? `${detailMission.title} · stetig interpoliert` : "Für diese Mission ist noch kein Weg gespeichert."}</small>
+              <span>Darstellung</span>
+              <select value={detailHeatmapMode} onChange={(event) => setDetailHeatmapMode(event.target.value as "full" | "confidence")} disabled={detailMissionObservations.length === 0}>
+                <option value="full">Vollständig · Confidence-Abblendung</option>
+                <option value="confidence">Confidence-begrenzt</option>
+              </select>
+              {detailHeatmapMode === "confidence" && <>
+                <span>Max. Distanz: {detailHeatmapMaxDistance} m</span>
+                <input type="range" min={10} max={100} step={5} value={detailHeatmapMaxDistance} onChange={(event) => setDetailHeatmapMaxDistance(Number(event.target.value))} />
+                <span>Min. Confidence: {Math.round(detailHeatmapMinConfidence * 100)} %</span>
+                <input type="range" min={0} max={1} step={0.05} value={detailHeatmapMinConfidence} onChange={(event) => setDetailHeatmapMinConfidence(Number(event.target.value))} />
+              </>}
+              <small>{detailPersistedResult ? `${detailMission.title} · gespeicherte Messwerte · Anzeige modelliert/interpoliert` : detailMission.missionPath ? `${detailMission.title} · Vorschau aus Seed, noch nicht als Ergebnis gespeichert` : "Für diese Mission ist noch kein Weg gespeichert."}</small>
             </label>}
             <div className="mapOverlay forestMissionTimeline">
               <button className="primaryIconButton" type="button" disabled={chronologicalDetailMissions.length === 0} onClick={() => {
@@ -3102,7 +3197,7 @@ function BadenWuerttembergMapPage({
             </div>
             <div className={`osmPathStatus ${osmPathState}`}>
               <span>Vorhandene Waldwege</span>
-              <strong>{osmPathState === "loading" ? `Wege werden geladen … ${osmPathProgress}%` : osmPathState === "error" ? "Wegdaten derzeit nicht verfügbar" : `${osmForestPaths.length} Wege im Gebiet`}</strong>
+              <strong>{osmPathState === "loading" ? `${osmPathStatus?.message ?? "Wege werden geladen …"} ${osmPathProgress}%` : osmPathState === "error" ? osmPathStatus?.message ?? "Wegdaten derzeit nicht verfügbar" : `${osmForestPaths.length} Wege im Gebiet · ${formatOsmSource(osmPathStatus?.source)}`}</strong>
               {osmPathState === "loading" && <progress max={100} value={osmPathProgress}>{osmPathProgress}%</progress>}
               {osmPathState === "error" && <button className="textButton" type="button" onClick={() => setOsmReloadKey((value) => value + 1)}>Wegenetz erneut laden</button>}
               {osmPathState === "ready" && osmForestPaths.length > 0 && <small>OpenStreetMap-Wegdaten · auf einen grünen Weg klicken, um ihn bei geöffneter Planung zu übernehmen.</small>}
@@ -3179,7 +3274,10 @@ function BadenWuerttembergMapPage({
                       <Eye className="forestMissionOpenIcon" size={17} aria-hidden="true" />
                     </button>
                     {detailMissionId === mission.id && <button className="commandButton forestMissionEnterButton" onClick={() => onOpenMission(mission)} type="button">Missionsansicht öffnen</button>}
-                    {canManage && <button className="forestMissionDeleteButton" onClick={() => { if (window.confirm(`${mission.title} wirklich löschen?`)) void onDeleteMission(mission.id); }} type="button" aria-label={`${mission.title} löschen`} title="Mission löschen">
+                    {canManage && <button className="commandButton" onClick={() => { if (window.confirm(`Nur die Planung „${mission.title}“ archivieren? Gespeicherte Ergebnisse bleiben erhalten.`)) void onArchiveMission(mission.id); }} type="button" aria-label={`${mission.title} archivieren`} title="Nur Planung archivieren">
+                      Archivieren
+                    </button>}
+                    {canManage && <button className="forestMissionDeleteButton" onClick={() => { if (window.confirm(`„${mission.title}“ sowie alle gespeicherten Messwerte, Detektionen und Ergebnisse dauerhaft löschen?`)) void onDeleteMission(mission.id); }} type="button" aria-label={`${mission.title} vollständig löschen`} title="Planung und Ergebnisse dauerhaft löschen">
                       <Trash2 size={15} />
                     </button>}
                   </div>
@@ -4152,6 +4250,10 @@ function createMissionRecord({
   overview,
   copernicus,
   biodiversityMetrics,
+  observations,
+  missionPath,
+  scenarioParams,
+  existingCreatedAt,
 }: {
   missionId: string;
   areaId: string;
@@ -4167,16 +4269,22 @@ function createMissionRecord({
   overview: MissionOverview;
   copernicus: CopernicusAnalysis;
   biodiversityMetrics: BiodiversityMetrics;
+  observations: Observation[];
+  missionPath: MissionPath;
+  scenarioParams: ScenarioParams;
+  existingCreatedAt?: string;
 }): MissionRecord {
+  const timestamp = new Date().toISOString();
+  const persistedObservations = observations.map((observation) => ({ ...structuredClone(observation), missionId }));
   return {
-    id: `${missionId}-${Date.now()}`,
+    id: `mission-result-${missionId}`,
     missionId,
     areaId,
     municipalityId,
     scenarioName: scenarioName || "Athene Szenario",
     forestAreaName,
     pathName,
-    createdAt: new Date().toISOString(),
+    createdAt: existingCreatedAt ?? timestamp,
     missionStartedAt,
     missionCompletedAt,
     surveyedAt: missionCompletedAt,
@@ -4208,6 +4316,22 @@ function createMissionRecord({
     coverageShare,
     unknownShare: coverageShare === null ? null : round(1 - coverageShare, 3),
     linkageStatus: areaId && municipalityId ? "linked" : "review-needed",
+    observations: persistedObservations,
+    detections: persistedObservations.flatMap((observation) => observation.detections.map((detection) => ({
+      ...detection,
+      observationId: observation.id,
+      lat: observation.lat,
+      lng: observation.lng,
+      timestamp: observation.timestamp,
+      dataOrigin: observation.dataOrigin,
+      dataStatus: observation.dataStatus,
+      source: observation.source,
+      modelVersion: observation.generatorVersion,
+    }))),
+    missionPath,
+    scenarioParams,
+    resultVersion: 1,
+    updatedAt: timestamp,
   };
 }
 
@@ -4322,6 +4446,12 @@ function buildForestPath(waypoints: Waypoint[], name: string): ForestPath {
 function calculateRouteLengthMeters(points: Array<Coordinate & { breakBefore?: boolean }>): number {
   if (points.length < 2) return 0;
   return points.slice(1).reduce((sum, point, index) => point.breakBefore ? sum : sum + distanceBetweenCoordinatesMeters(points[index], point), 0);
+}
+
+function routeCoordinatesEqual(left: Coordinate[], right: Coordinate[]): boolean {
+  return left.length === right.length && left.every((point, index) =>
+    Math.abs(point.lat - right[index].lat) < 1e-9 && Math.abs(point.lng - right[index].lng) < 1e-9 &&
+    Boolean((point as Waypoint).breakBefore) === Boolean((right[index] as Waypoint).breakBefore));
 }
 
 function composeRouteSegments(baseRoute: Coordinate[], segments: OsmForestPath[]): Array<Coordinate & { breakBefore?: boolean }> {

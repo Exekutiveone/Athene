@@ -108,8 +108,15 @@ export async function savePlannedMission(record: PlannedMissionRecord): Promise<
   return requestJson<PlannedMissionRecord>(`/planned-missions/${encodeURIComponent(record.id)}`, { method: "PUT", body: JSON.stringify(record) });
 }
 
-export async function deletePlannedMission(missionId: string): Promise<void> {
-  await requestEmpty(`/planned-missions/${encodeURIComponent(missionId)}`, { method: "DELETE" });
+export async function saveMissionBundle(plannedMission: PlannedMissionRecord, missionRecord: MissionRecord): Promise<{ plannedMission: PlannedMissionRecord; missionRecord: MissionRecord }> {
+  return requestJson(`/planned-missions/${encodeURIComponent(plannedMission.id)}/result`, {
+    method: "PUT",
+    body: JSON.stringify({ plannedMission, missionRecord }),
+  });
+}
+
+export async function deletePlannedMission(missionId: string, deleteResults = false): Promise<void> {
+  await requestEmpty(`/planned-missions/${encodeURIComponent(missionId)}?deleteResults=${deleteResults ? "true" : "false"}`, { method: "DELETE" });
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {

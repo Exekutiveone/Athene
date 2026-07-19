@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseOsmBounds, prepareOsmWays } from "../server/osmProxy.js";
-import { clipWayToPolygon } from "../src/osmForestPaths.js";
+import { clipWayToPolygon, fetchOsmForestPaths } from "../src/osmForestPaths.js";
+import { seedDeploymentAreas } from "../src/management.js";
 
 test("OSM proxy bounds reject malformed and oversized requests", () => {
   assert.deepEqual(parseOsmBounds({ south: "48", west: "9", north: "48.1", east: "9.1" }), [48, 9, 48.1, 9.1]);
@@ -25,4 +26,16 @@ test("server prepares clipped and simplified forest paths before browser deliver
   assert.equal(prepared.paths[0].name, "Testweg");
   assert.ok(prepared.paths[0].coordinates.every((point) => point.lng >= 9 && point.lng <= 9.01));
   assert.equal(prepareOsmWays(payload, polygon, "test-area-v1", 2.5).cacheStatus, "HIT");
+});
+
+test("an empty OSM response is reported as an error instead of a successful empty network", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ elements: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+  const progress: string[] = [];
+  try {
+    await assert.rejects(fetchOsmForestPaths({ ...seedDeploymentAreas[0], id: "empty-osm-test", updatedAt: "empty-osm-test" }, new AbortController().signal, (state) => progress.push(state.stage)), /keine.*Weg/i);
+    assert.equal(progress.at(-1), "error");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

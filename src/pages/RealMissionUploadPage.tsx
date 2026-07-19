@@ -31,10 +31,10 @@ export function RealMissionUploadPage({ area, route, onBack, onCreateMission }: 
       return;
     }
     setSaving(true);
-    setStatus("Mission und Upload-Metadaten werden gespeichert …");
+    setStatus("Die Missionsplanung wird gespeichert … Dateien bleiben ausschließlich in dieser lokalen Mock-Maske.");
     try {
       await onCreateMission({ title, objective, priority });
-      setStatus("Reale Mission wurde angelegt. Die ausgewählten Dateien sind als Upload-Prototyp real / ungeprüft vorgemerkt.");
+      setStatus("Missionsplanung angelegt. Die ausgewählten Dateien wurden weder hochgeladen noch verarbeitet oder gespeichert.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Mission konnte nicht angelegt werden.");
     } finally {
@@ -51,7 +51,7 @@ export function RealMissionUploadPage({ area, route, onBack, onCreateMission }: 
       <main className="realMissionUploadMain">
         <section className="uploadMissionIntro">
           <ShieldCheck size={24} />
-          <div><strong>Reale Daten bleiben bis zur fachlichen Prüfung ungeprüft.</strong><p>Dateien werden in dieser Mock-Maske ausgewählt und der Mission zugeordnet. Sie werden nicht als validierte Messwerte oder flächendeckende Erkenntnisse dargestellt.</p></div>
+          <div><strong>Realer Upload ist in diesem Prototyp nicht implementiert.</strong><p>Dateien werden nur in der aktuellen Browser-Sitzung als Dateinamen angezeigt. Inhalte werden weder hochgeladen noch verarbeitet oder gespeichert und niemals als Messwerte dargestellt.</p></div>
         </section>
         <form className="realMissionUploadForm" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
           <div className="uploadMissionFields">
@@ -61,7 +61,7 @@ export function RealMissionUploadPage({ area, route, onBack, onCreateMission }: 
             <div className="uploadRouteStatus"><MapPinned size={17} /><span><strong>{route.length} Routenpunkte</strong><small>{route.length >= 2 ? "Route aus Waldansicht übernommen" : "Keine verwendbare Route vorhanden"}</small></span></div>
           </div>
           <label className="realUploadDropzone">
-            <Upload size={28} /><strong>Messdaten oder Medien auswählen</strong><small>CSV, JSON, GeoJSON, Bilder und ZIP · Mock-Upload ohne fachliche Validierung</small>
+            <Upload size={28} /><strong>Messdaten oder Medien auswählen</strong><small>Nur UI-Mock · kein Upload, keine Verarbeitung, keine Speicherung</small>
             <input type="file" multiple accept=".csv,.json,.geojson,.zip,image/*" onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
           </label>
           {files.length > 0 && <div className="realUploadFileList">{files.map((file) => <div key={`${file.name}-${file.size}`}><FileText size={15} /><span><strong>{file.name}</strong><small>{(file.size / 1024).toLocaleString("de-DE", { maximumFractionDigits: 1 })} KB · real / ungeprüft</small></span></div>)}</div>}

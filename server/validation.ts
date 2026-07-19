@@ -9,7 +9,7 @@ const municipalityTypes = ["Gemeinde", "Stadt", "Landkreis"] as const;
 const accessValues = ["Admin", "Operator", "Viewer"] as const;
 const entityStatuses = ["active", "archived"] as const;
 const missionPriorities = ["normal", "hoch", "kritisch"] as const;
-const missionStatuses = ["entwurf", "geplant", "bereit", "processing", "abgeschlossen"] as const;
+const missionStatuses = ["entwurf", "geplant", "bereit", "processing", "abgeschlossen", "archiviert"] as const;
 
 export function ensurePathRecord(value: unknown): SavedPathRecord {
   const record = value as SavedPathRecord;
@@ -34,6 +34,26 @@ export function ensureMissionRecord(value: unknown): MissionRecord {
   if (record.coverageShare !== null && record.unknownShare !== null && Math.abs(record.coverageShare + record.unknownShare - 1) > 0.02) invalid("coverage sum");
   if (record.linkageStatus === "linked" && (!record.areaId || !record.municipalityId)) invalid("linked mission IDs");
   if (!["linked", "review-needed"].includes(record.linkageStatus)) invalid("mission linkageStatus");
+  if (record.observations !== undefined) {
+    if (!Array.isArray(record.observations) || !record.observations.every((observation) =>
+      observation.missionId === record.missionId && Number.isFinite(observation.lat) && Number.isFinite(observation.lng) &&
+      Boolean(observation.timestamp && observation.source && observation.generatorVersion) && origins.includes(observation.dataOrigin as never) &&
+      recordStatuses.includes(observation.dataStatus as never) && Number.isFinite(observation.confidence) && observation.confidence >= 0 && observation.confidence <= 1 &&
+      Array.isArray(observation.detections))) invalid("mission observations");
+  }
+  if (record.detections !== undefined && (!Array.isArray(record.detections) || !record.detections.every((detection) =>
+    detection.observationId && detection.timestamp && detection.source && Number.isFinite(detection.lat) && Number.isFinite(detection.lng) &&
+    Number.isFinite(detection.confidence) && detection.confidence >= 0 && detection.confidence <= 1))) invalid("mission detections");
+  if (record.missionPath !== undefined && record.missionPath !== null) {
+    if (!record.missionPath.name || !Array.isArray(record.missionPath.waypoints)) invalid("mission result path");
+    const canonicalWaypoints = record.missionPath.segments?.length ? flattenRouteSegments(record.missionPath.segments) : record.missionPath.waypoints;
+    if (!canonicalWaypoints.every((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))) invalid("mission result path coordinates");
+    record.missionPath = createMissionPath(record.missionPath.name, canonicalWaypoints);
+  }
+  if (record.scenarioParams !== undefined) {
+    if (!record.scenarioParams || !["Mischwald", "Nadelwald", "Laubwald", "Aufforstungsfläche"].includes(record.scenarioParams.forestType) || !["Frühjahr", "Sommer", "Herbst", "Winter"].includes(record.scenarioParams.season)) invalid("mission scenario parameters");
+    if (![record.scenarioParams.drought, record.scenarioParams.pollution, record.scenarioParams.pestPressure, record.scenarioParams.stormDamage].every((number) => Number.isFinite(number) && number >= 0 && number <= 1)) invalid("mission scenario parameter values");
+  }
   return record;
 }
 

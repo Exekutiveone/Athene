@@ -125,6 +125,15 @@ export interface DetectionEvent {
   confidence: number;
 }
 
+export interface PersistedDetection extends DetectionEvent, Coordinate {
+  observationId: string;
+  timestamp: string;
+  dataOrigin: DataOrigin;
+  dataStatus: DataStatus;
+  source: string;
+  modelVersion: string | null;
+}
+
 export interface LayerDefinition {
   id: LayerId;
   name: string;
@@ -246,7 +255,7 @@ export interface PlannedMissionRecord {
   objective: string;
   requestedAt: string;
   priority: "normal" | "hoch" | "kritisch";
-  status: "entwurf" | "geplant" | "bereit" | "processing" | "abgeschlossen";
+  status: "entwurf" | "geplant" | "bereit" | "processing" | "abgeschlossen" | "archiviert";
   seed: string;
   scenarioName: string;
   pathName: string;
@@ -268,6 +277,7 @@ export interface PlannedMissionRecord {
   params: ScenarioParams;
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string;
 }
 
 export interface MissionRecord {
@@ -294,4 +304,11 @@ export interface MissionRecord {
   coverageShare: number | null;
   unknownShare: number | null;
   linkageStatus: "linked" | "review-needed";
+  /** Fully persisted mission result. Legacy summary-only records omit these fields. */
+  observations?: Observation[];
+  detections?: PersistedDetection[];
+  missionPath?: MissionPath | null;
+  scenarioParams?: ScenarioParams;
+  resultVersion?: 1;
+  updatedAt?: string;
 }

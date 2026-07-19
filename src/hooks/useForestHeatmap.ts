@@ -6,14 +6,22 @@ import type { ForestHeatmapImage } from "../forestHeatmap";
 const cache = new Map<string, ForestHeatmapImage>();
 let requestSequence = 0;
 
-export function useForestHeatmap(observations: Observation[], layer: LayerDefinition, polygon: Coordinate[], enabled = true) {
+export interface HeatmapDisplayOptions {
+  mode: "full" | "confidence";
+  maxDistanceMeters: number;
+  minConfidence: number;
+}
+
+const defaultOptions: HeatmapDisplayOptions = { mode: "full", maxDistanceMeters: 30, minConfidence: 0.45 };
+
+export function useForestHeatmap(observations: Observation[], layer: LayerDefinition, polygon: Coordinate[], enabled = true, options: HeatmapDisplayOptions = defaultOptions) {
   const [image, setImage] = useState<ForestHeatmapImage | null>(null);
   const [loading, setLoading] = useState(false);
   const key = useMemo(() => {
     const valueSignature = observations.map((observation) => `${observation.id}:${getLayerValue(observation, layer.id).toFixed(4)}:${observation.confidence.toFixed(3)}`).join("|");
     const polygonSignature = polygon.map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`).join(";");
-    return `${layer.id}:${valueSignature}:${polygonSignature}`;
-  }, [layer.id, observations, polygon]);
+    return `${layer.id}:${options.mode}:${options.maxDistanceMeters}:${options.minConfidence}:${valueSignature}:${polygonSignature}`;
+  }, [layer.id, observations, options.maxDistanceMeters, options.minConfidence, options.mode, polygon]);
   useEffect(() => {
     if (!enabled || observations.length === 0 || polygon.length < 3) { setImage(null); setLoading(false); return; }
     const cached = cache.get(key);
@@ -30,9 +38,9 @@ export function useForestHeatmap(observations: Observation[], layer: LayerDefini
     };
     worker.onerror = () => { setLoading(false); worker.terminate(); };
     const lookup = Array.from({ length: 256 }, (_, index) => parseHeatmapColor(colorForValue(layer.min + index / 255 * (layer.max - layer.min), layer)));
-    worker.postMessage({ id, polygon, observations: observations.map((observation) => ({ lat: observation.lat, lng: observation.lng, value: normalize(getLayerValue(observation, layer.id), layer) })), colorLookup: lookup });
+    worker.postMessage({ id, polygon, observations: observations.map((observation) => ({ lat: observation.lat, lng: observation.lng, value: normalize(getLayerValue(observation, layer.id), layer), confidence: observation.confidence })), colorLookup: lookup, mode: options.mode, maxDistanceMeters: options.maxDistanceMeters, minConfidence: options.minConfidence });
     return () => worker.terminate();
-  }, [enabled, key, layer, observations, polygon]);
+  }, [enabled, key, layer, observations, options.maxDistanceMeters, options.minConfidence, options.mode, polygon]);
   return { image, loading };
 }
 

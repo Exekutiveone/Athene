@@ -1,14 +1,18 @@
 import type { Coordinate } from "../domain";
+import { estimateSpatialConfidence, shouldRenderHeatmapCell } from "../heatmapPolicy";
 
 interface RequestPayload {
   id: number;
   polygon: Coordinate[];
-  observations: Array<Coordinate & { value: number }>;
+  observations: Array<Coordinate & { value: number; confidence: number }>;
   colorLookup: Array<[number, number, number]>;
+  mode: "full" | "confidence";
+  maxDistanceMeters: number;
+  minConfidence: number;
 }
 
 self.onmessage = async (event: MessageEvent<RequestPayload>) => {
-  const { id, polygon, observations, colorLookup } = event.data;
+  const { id, polygon, observations, colorLookup, mode, maxDistanceMeters, minConfidence } = event.data;
   const bounds = coordinateBounds(polygon);
   if (!bounds || observations.length === 0) {
     self.postMessage({ id, error: "Keine Heatmap-Daten" });
@@ -27,10 +31,11 @@ self.onmessage = async (event: MessageEvent<RequestPayload>) => {
   const context = canvas.getContext("2d");
   if (!sourceContext || !context) return self.postMessage({ id, error: "Canvas nicht verfügbar" });
   const pixels = sourceContext.createImageData(width, height);
-  const projected = observations.map((point) => ({ x: (point.lng - minLng) * 111_320 * Math.cos(meanLatRadians), y: (point.lat - minLat) * 111_320, value: point.value }));
+  const projected = observations.map((point) => ({ x: (point.lng - minLng) * 111_320 * Math.cos(meanLatRadians), y: (point.lat - minLat) * 111_320, value: point.value, confidence: point.confidence }));
   const neighbourCount = Math.min(6, projected.length);
   const distances = new Float64Array(neighbourCount);
   const values = new Float64Array(neighbourCount);
+  const confidences = new Float64Array(neighbourCount);
   for (let y = 0; y < height; y += 1) {
     const lat = maxLat - ((y + 0.5) / height) * (maxLat - minLat);
     const projectedY = (lat - minLat) * 111_320;
@@ -43,13 +48,17 @@ self.onmessage = async (event: MessageEvent<RequestPayload>) => {
         const distance = (observation.x - projectedX) ** 2 + (observation.y - projectedY) ** 2;
         if (distance >= distances[neighbourCount - 1]) continue;
         let at = neighbourCount - 1;
-        while (at > 0 && distance < distances[at - 1]) { distances[at] = distances[at - 1]; values[at] = values[at - 1]; at -= 1; }
-        distances[at] = distance; values[at] = observation.value;
+        while (at > 0 && distance < distances[at - 1]) { distances[at] = distances[at - 1]; values[at] = values[at - 1]; confidences[at] = confidences[at - 1]; at -= 1; }
+        distances[at] = distance; values[at] = observation.value; confidences[at] = observation.confidence;
       }
-      let weighted = 0; let weightSum = 0;
-      for (let index = 0; index < neighbourCount; index += 1) { const weight = 1 / Math.max(49, distances[index]); weighted += values[index] * weight; weightSum += weight; }
+      let weighted = 0; let weightedConfidence = 0; let weightSum = 0;
+      for (let index = 0; index < neighbourCount; index += 1) { const weight = 1 / Math.max(49, distances[index]); weighted += values[index] * weight; weightedConfidence += confidences[index] * weight; weightSum += weight; }
+      const nearestDistance = Math.sqrt(distances[0]);
+      const confidence = estimateSpatialConfidence(weightedConfidence / Math.max(weightSum, Number.EPSILON), nearestDistance);
+      if (!shouldRenderHeatmapCell(mode, nearestDistance, confidence, maxDistanceMeters, minConfidence)) continue;
       const color = colorLookup[Math.max(0, Math.min(255, Math.round(weighted / Math.max(weightSum, Number.EPSILON) * 255)))] ?? colorLookup[0];
-      pixels.data.set([...color, 235], (y * width + x) * 4);
+      const alpha = mode === "full" ? Math.round(70 + 165 * Math.max(0, Math.min(1, confidence))) : 235;
+      pixels.data.set([...color, alpha], (y * width + x) * 4);
     }
   }
   sourceContext.putImageData(pixels, 0, 0);

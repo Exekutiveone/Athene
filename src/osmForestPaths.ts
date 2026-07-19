@@ -1,6 +1,7 @@
 import { Coordinate, DeploymentArea } from "./domain.js";
 
 export interface OsmForestPath { id: number; name: string; highway: string; coordinates: Coordinate[] }
+export interface OsmLoadProgress { percent: number; stage: "cache" | "proxy" | "fallback" | "processing" | "ready" | "error"; source?: "memory-cache" | "browser-cache" | "athene-proxy" | "external-fallback"; message: string; count?: number }
 interface OverpassWayResponse { elements?: Array<{ type: "way"; id: number; tags?: Record<string, string>; geometry?: Array<{ lat: number; lon: number }> }>; paths?: OsmForestPath[] }
 interface BrowserCacheEntry { paths?: OsmForestPath[]; cachedAt?: number }
 
@@ -9,22 +10,24 @@ const cacheIndexKey = "athene.osmForestPaths.lru.v4";
 const cacheMaxAgeMs = 24 * 60 * 60 * 1_000;
 const browserRuntime = globalThis as typeof globalThis & { localStorage: { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void } };
 
-export async function fetchOsmForestPaths(area: DeploymentArea, signal: AbortSignal, onProgress: (progress: number) => void = () => undefined): Promise<OsmForestPath[]> {
+export async function fetchOsmForestPaths(area: DeploymentArea, signal: AbortSignal, onProgress: (progress: OsmLoadProgress) => void = () => undefined): Promise<OsmForestPath[]> {
   const bounds = coordinateBounds(area.polygon);
   if (!bounds) return [];
   const [[south, west], [north, east]] = bounds;
   const query = `[out:json][timeout:20];way["highway"~"^(track|path|footway|bridleway|cycleway|service|unclassified)$"](${south},${west},${north},${east});out geom;`;
   const cacheKey = `athene.osmForestPaths.v4.${area.id}.${area.updatedAt}`;
+  onProgress({ percent: 5, stage: "cache", message: "Lokaler Weg-Cache wird geprüft …" });
   const cached = readCache(cacheKey);
-  if (cached) { onProgress(100); return cached; }
+  if (cached) { onProgress({ percent: 100, stage: "ready", source: cached.source, message: `${cached.paths.length} Wege aus dem Cache geladen`, count: cached.paths.length }); return cached.paths; }
   const attempts = [
     { url: `/api/osm-forest-paths?areaId=${encodeURIComponent(area.id)}&south=${south}&west=${west}&north=${north}&east=${east}`, timeoutMs: 38_000 },
     { url: `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`, timeoutMs: 15_000 },
     { url: `https://overpass.kumi.systems/api/interpreter?data=${encodeURIComponent(query)}`, timeoutMs: 15_000 },
   ];
   let payload: OverpassWayResponse | null = null;
+  let successfulSource: "athene-proxy" | "external-fallback" = "athene-proxy";
   let lastError: unknown = null;
-  onProgress(10);
+  onProgress({ percent: 10, stage: "proxy", message: "Athene-OSM-Proxy wird angefragt …" });
   for (let index = 0; index < attempts.length; index += 1) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
     const controller = new AbortController();
@@ -32,20 +35,27 @@ export async function fetchOsmForestPaths(area: DeploymentArea, signal: AbortSig
     signal.addEventListener("abort", abortAttempt, { once: true });
     const timeout = setTimeout(() => controller.abort(), attempts[index].timeoutMs);
     try {
-      onProgress(15 + index * 20);
+      onProgress({ percent: 15 + index * 20, stage: index === 0 ? "proxy" : "fallback", source: index === 0 ? "athene-proxy" : "external-fallback", message: index === 0 ? "Wegenetz wird über den Athene-Proxy geladen …" : `Externer OSM-Fallback ${index} wird versucht …` });
       const response = await fetch(attempts[index].url, { signal: controller.signal });
       if (!response.ok) throw new Error(`Overpass ${response.status}`);
-      onProgress(55 + index * 12);
-      payload = await response.json() as OverpassWayResponse;
+      onProgress({ percent: 55 + index * 12, stage: "processing", source: index === 0 ? "athene-proxy" : "external-fallback", message: "Wegdaten werden zugeschnitten und vereinfacht …" });
+      const candidate = await response.json() as OverpassWayResponse;
+      if (!(candidate.paths?.length || candidate.elements?.length)) throw new Error("OSM-Endpunkt lieferte keine Wegdaten.");
+      payload = candidate;
+      successfulSource = index === 0 ? "athene-proxy" : "external-fallback";
       break;
     } catch (error) { lastError = error; }
     finally { clearTimeout(timeout); signal.removeEventListener("abort", abortAttempt); }
   }
-  if (!payload) throw lastError instanceof Error ? lastError : new Error("OSM-Wegenetz konnte nicht geladen werden.");
-  onProgress(80);
+  if (!payload) {
+    const message = lastError instanceof Error ? lastError.message : "OSM-Wegenetz konnte nicht geladen werden.";
+    onProgress({ percent: 0, stage: "error", message, count: 0 });
+    throw new Error(message);
+  }
+  onProgress({ percent: 80, stage: "processing", message: "Wegsegmente werden für das Waldpolygon aufbereitet …" });
   if (payload.paths?.length) {
     writeCache(cacheKey, payload.paths);
-    onProgress(100);
+    onProgress({ percent: 100, stage: "ready", source: successfulSource, message: `${payload.paths.length} Wege geladen`, count: payload.paths.length });
     return payload.paths;
   }
   const paths = (payload.elements ?? []).flatMap<OsmForestPath>((way) => clipWayToPolygon((way.geometry ?? []).map(({ lat, lon }) => ({ lat, lng: lon })), area.polygon).map((coordinates, partIndex) => ({
@@ -54,17 +64,21 @@ export async function fetchOsmForestPaths(area: DeploymentArea, signal: AbortSig
     highway: way.tags?.highway ?? "path",
     coordinates: simplifyPath(coordinates, 1.5),
   })));
-  if (paths.length > 0) writeCache(cacheKey, paths);
-  onProgress(100);
+  if (paths.length === 0) {
+    onProgress({ percent: 0, stage: "error", message: "OSM lieferte keine verwendbaren Wege innerhalb dieses Waldgebiets.", count: 0 });
+    throw new Error("OSM lieferte keine verwendbaren Wege innerhalb dieses Waldgebiets.");
+  }
+  writeCache(cacheKey, paths);
+  onProgress({ percent: 100, stage: "ready", source: successfulSource, message: `${paths.length} Wege geladen`, count: paths.length });
   return paths;
 }
 
-function readCache(cacheKey: string): OsmForestPath[] | null {
+function readCache(cacheKey: string): { paths: OsmForestPath[]; source: "memory-cache" | "browser-cache" } | null {
   const memory = memoryCache.get(cacheKey);
-  if (memory?.length) { writeCache(cacheKey, memory); return memory; }
+  if (memory?.length) { writeCache(cacheKey, memory); return { paths: memory, source: "memory-cache" }; }
   try {
     const entry = JSON.parse(browserRuntime.localStorage.getItem(cacheKey) ?? "null") as BrowserCacheEntry | null;
-    if (entry?.paths?.length && Date.now() - (entry.cachedAt ?? 0) < cacheMaxAgeMs) { writeCache(cacheKey, entry.paths); return entry.paths; }
+    if (entry?.paths?.length && Date.now() - (entry.cachedAt ?? 0) < cacheMaxAgeMs) { writeCache(cacheKey, entry.paths); return { paths: entry.paths, source: "browser-cache" }; }
   } catch { /* cache is optional */ }
   return null;
 }

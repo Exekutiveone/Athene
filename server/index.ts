@@ -168,9 +168,22 @@ app.put("/api/planned-missions/:id", asyncRoute(async (request, response) => {
   response.json(saved);
 }));
 
+app.put("/api/planned-missions/:id/result", asyncRoute(async (request, response) => {
+  const plannedMission = ensurePlannedMission({ ...request.body?.plannedMission, id: request.params.id });
+  const missionRecord = ensureMissionRecord(request.body?.missionRecord);
+  if (missionRecord.missionId !== plannedMission.id) throw new Error("Mission result does not belong to planned mission");
+  const saved = await updateDatabase((database) => {
+    database.plannedMissions = [plannedMission, ...database.plannedMissions.filter((candidate) => candidate.id !== plannedMission.id)];
+    database.missionRecords = [missionRecord, ...database.missionRecords.filter((candidate) => candidate.id !== missionRecord.id)];
+    return { plannedMission, missionRecord };
+  });
+  response.json(saved);
+}));
+
 app.delete("/api/planned-missions/:id", asyncRoute(async (request, response) => {
   await updateDatabase((database) => {
     database.plannedMissions = database.plannedMissions.filter((candidate) => candidate.id !== request.params.id);
+    if (request.query.deleteResults === "true") database.missionRecords = database.missionRecords.filter((candidate) => candidate.missionId !== request.params.id);
   });
   response.status(204).end();
 }));

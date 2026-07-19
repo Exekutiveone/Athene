@@ -3135,7 +3135,7 @@ input[type="range"] {
   background: #15803d;
 }
 
-.missionSaveFloatingButton.queued {
+.missionSaveFloatingButton.error {
   border-color: #c2410c;
   background: #c2410c;
 }

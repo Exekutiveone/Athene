@@ -26,7 +26,7 @@ const defaultDatabase: AtheneDatabase = {
   plannedMissions: structuredClone(seedPlannedMissions),
 };
 
-export const databasePath = resolve(process.cwd(), ".data", "athene-db.json");
+export const databasePath = resolve(process.env.ATHENE_DATABASE_PATH ?? resolve(process.cwd(), ".data", "athene-db.json"));
 const updateQueues = new Map<string, Promise<void>>();
 
 export async function readDatabase(): Promise<AtheneDatabase> {
@@ -153,6 +153,22 @@ function normalizeMissionRecord(record: MissionRecord, areas: DeploymentArea[]):
     coverageShare: typeof record.coverageShare === "number" ? record.coverageShare : null,
     unknownShare: typeof record.unknownShare === "number" ? record.unknownShare : null,
     linkageStatus: areaId && municipalityId ? "linked" : "review-needed",
+    observations: Array.isArray(record.observations) ? record.observations : undefined,
+    detections: Array.isArray(record.detections) ? record.detections : Array.isArray(record.observations) ? record.observations.flatMap((observation) => observation.detections.map((detection) => ({
+      ...detection,
+      observationId: observation.id,
+      lat: observation.lat,
+      lng: observation.lng,
+      timestamp: observation.timestamp,
+      dataOrigin: observation.dataOrigin,
+      dataStatus: observation.dataStatus,
+      source: observation.source,
+      modelVersion: observation.generatorVersion,
+    }))) : undefined,
+    missionPath: record.missionPath ? createMissionPath(record.missionPath.name, missionPathWaypointsFlat(record.missionPath)) : record.missionPath,
+    scenarioParams: record.scenarioParams,
+    resultVersion: record.observations ? 1 : record.resultVersion,
+    updatedAt: record.updatedAt ?? record.createdAt,
   };
 }
 

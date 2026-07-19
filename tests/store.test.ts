@@ -58,3 +58,34 @@ test("updates to the same database path are serialized without lost writes", asy
   const database = await readDatabaseFrom(path);
   assert.deepEqual(database.savedPaths.map((item) => item.id).sort(), ["one", "two"]);
 });
+
+test("full mission results survive a database restart without regeneration", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "athene-store-full-mission-"));
+  const path = join(directory, "database.json");
+  await readDatabaseFrom(path);
+  const waypoint = { id: "wp-1", sequence: 1, minute: 0, speedKmh: 3, lat: 48.1, lng: 9.1 };
+  const observation = {
+    id: "obs-1", missionId: "mission-persisted", waypointId: waypoint.id, timestamp: "2026-07-19T10:00:00.000Z", minute: 0,
+    lat: waypoint.lat, lng: waypoint.lng,
+    values: { temperature: 24, humidity: 48, pressure: 1012, co2: 420, voc: 90, pm1: 2, pm25: 4, pm10: 8, luxGround: 3000, luxCanopy: 12000, dryStress: 0.42 },
+    detections: [{ type: "bird" as const, label: "Amsel", confidence: 0.82 }], dataOrigin: "synthetic" as const, dataStatus: "simulated" as const,
+    confidence: 0.84, source: "Athene Mock Generator", generatorVersion: "test-generator-1",
+  };
+  const record = {
+    id: "mission-result-mission-persisted", missionId: "mission-persisted", areaId: "area-a", municipalityId: "municipality-a", scenarioName: "Persisted",
+    forestAreaName: "Forest", pathName: "Route", createdAt: "2026-07-19T10:00:00.000Z", updatedAt: "2026-07-19T10:05:00.000Z",
+    missionStartedAt: "2026-07-19T10:00:00.000Z", missionCompletedAt: "2026-07-19T10:05:00.000Z", surveyedAt: "2026-07-19T10:05:00.000Z",
+    seed: "stable-seed", generatorVersion: "test-generator-1", summary: "Persisted result", metrics: {}, recommendations: [], dataOrigin: "synthetic" as const,
+    dataStatus: "derived" as const, confidence: 0.84, source: "Athene Mock Generator", coverageShare: 0.2, unknownShare: 0.8, linkageStatus: "linked" as const,
+    observations: [observation], detections: [{ ...observation.detections[0], observationId: observation.id, lat: observation.lat, lng: observation.lng, timestamp: observation.timestamp, dataOrigin: observation.dataOrigin, dataStatus: observation.dataStatus, source: observation.source, modelVersion: observation.generatorVersion }],
+    missionPath: { name: "Route", waypoints: [waypoint, { ...waypoint, id: "wp-2", sequence: 2, lat: 48.2, lng: 9.2 }], segments: [[waypoint, { ...waypoint, id: "wp-2", sequence: 2, lat: 48.2, lng: 9.2 }]] },
+    scenarioParams: { forestType: "Mischwald" as const, season: "Sommer" as const, drought: 0.4, pollution: 0.2, pestPressure: 0.1, stormDamage: 0.1 }, resultVersion: 1 as const,
+  };
+  await updateDatabaseAt(path, (database) => { database.missionRecords = [record]; });
+  const restarted = await readDatabaseFrom(path);
+  assert.deepEqual(restarted.missionRecords[0].observations, [observation]);
+  assert.deepEqual(restarted.missionRecords[0].detections, record.detections);
+  assert.deepEqual(restarted.missionRecords[0].scenarioParams, record.scenarioParams);
+  assert.equal(restarted.missionRecords[0].missionPath?.segments?.length, 1);
+  assert.equal(restarted.missionRecords[0].seed, "stable-seed");
+});
